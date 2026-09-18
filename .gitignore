@@ -21,10 +21,13 @@ __pycache__/
 /tools/build/
 /tools/venv/
 /tools/wrappers/target/
+target/
 
-# Generated corpus, builds, source checkouts, runs, and reports
-bench/.local/
-bench/adapters/*/target/
+# Generated benchmark runs
+bench/results/
+
+# Local fixtures, benchmark inputs, and reference verification cache
+/data/
 
 # Ignored folders (dev only)
 tmp/

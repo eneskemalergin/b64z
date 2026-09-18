@@ -1,0 +1,33 @@
+# Zig build artifacts
+zig-out/
+zig-pkg/
+zig-cache/
+.zig-cache/
+
+# Editor
+.vscode/
+*.swp
+*~
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+
+# Locally built peer tools
+/tools/bin/
+/tools/src/
+/tools/build/
+/tools/venv/
+/tools/wrappers/target/
+
+# Generated corpus, builds, source checkouts, runs, and reports
+bench/.local/
+bench/adapters/*/target/
+
+# Ignored folders (dev only)
+tmp/
+plan/
+vendor/
+experiments/

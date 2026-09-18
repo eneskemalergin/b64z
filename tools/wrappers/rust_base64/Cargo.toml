@@ -1,0 +1,14 @@
+[package]
+name = "rust-base64-peer"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+base64 = "0.23.1"
+
+[profile.release]
+codegen-units = 1
+lto = "fat"
+opt-level = 3
+panic = "abort"

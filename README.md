@@ -32,4 +32,4 @@ python3 tools/peer_check.py
 python3 tools/peer_check.py --bench --reference tools/bin/aklomp-base64
 ```
 
-These commands qualify output bytes. They do not claim a speed ranking. A timing runner is not present in this checkout yet.
+These commands qualify output bytes. They do not claim a speed ranking.

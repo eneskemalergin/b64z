@@ -143,13 +143,44 @@ The current invalid fixture run found these accepted cases: Aklomp accepted `mis
 4. Write raw output directly to stdout. The peer runner redirects stdout to its comparison file.
 5. Keep diagnostics on stderr and keep normal stdout byte-clean.
 6. Qualify encode and decode bytes against `data/fixture/valid/*.b64` and `data/fixture/valid/*.bin` before measuring speed.
-7. Run the same benchmark input through every peer. Record the mode, input path, build mode, compiler, CPU target, source version, and accepted-input differences.
+7. Run the same benchmark input through every peer selected for that mode. Record the mode, input path, build mode, compiler, CPU target, source version, and accepted-input differences.
 8. Do not compare a peer's malformed-input behavior as a speed row unless its accepted grammar is the same as B64Z's grammar.
 9. Strip retained copies in `tools/bin/` after building; build trees remain available under ignored `tools/build/` and `tools/src/` paths.
 
-This pass builds and byte-qualifies the peer executables. It does not claim a speed ranking. Timing belongs in the benchmark runner after the command, CPU target, source revision, and output comparison have been recorded.
+This pass builds and byte-qualifies the peer executables. The two benchmark targets use these binaries only after their own byte checks pass. Each report records the command, input path, build flags, CPU target, source version, and output comparison.
 
 `tools/base64_data.py` verifies B64Z and Aklomp and maintains the small local benchmark cache. The cache uses file size, modification time, encoded length, and a direct B64Z round trip. It does not store a digest or output fingerprint. `tools/peer_check.py` qualifies every peer without moving external tools into the Zig test executable.
+
+## Benchmark runner
+
+`bench/run.sh` is the single common entrypoint. `bench/linux-x86-avx2/run.sh` builds `ReleaseFast` with `-Dcpu=haswell`; `bench/linux-x86-scalar/run.sh` builds `ReleaseFast` with `-Dcpu=x86_64`. Both write their binary, measurements, summary, and figures under their target folder.
+
+The runner keeps one operation and one input in each Zebrac group. It measures `encode-memory`, `encode-streaming`, `decode-memory`, and `decode-streaming` as separate suites. It generates the canonical encoded decode inputs under ignored `bench/work/` before timing.
+
+The runner includes a peer command only when that executable has a qualified path for the selected mode. A direct wrapper around a library's slice API qualifies for a memory suite; it does not qualify for a streaming suite unless it calls a stateful streaming API. The reports therefore compare complete commands without presenting a memory wrapper as a streaming implementation.
+
+The current measurement process is Linux-only because Zebrac uses `perf_event_open`. The report records the machine architecture, CPU count, CPU governor, kernel, Git commit, B64Z backend, and selected peer versions. The two target reports remain separate because their B64Z binaries use different CPU code.
+
+```sh
+bash bench/linux-x86-avx2/run.sh
+bash bench/linux-x86-scalar/run.sh
+```
+
+## Mode qualification
+
+The current peer executables have this mode coverage:
+
+| Peer executable    | Memory suites     | Streaming suites  | Executable path                                                            |
+| ------------------ | ----------------- | ----------------- | -------------------------------------------------------------------------- |
+| Aklomp             | no                | encode and decode | Upstream CLI uses Aklomp stateful stream functions.                        |
+| simdutf            | encode and decode | no                | Direct wrapper calls the library slice functions with preallocated output. |
+| GNU Coreutils      | no                | encode and decode | Upstream `base64` command processes input in chunks.                       |
+| Turbo-Base64       | encode and decode | no                | Direct wrapper calls the library buffer functions.                         |
+| Rust `base64`      | encode and decode | no                | Direct wrapper calls the crate slice functions with preallocated output.   |
+| Rust `base64-simd` | encode and decode | no                | Direct wrapper calls the crate slice functions with preallocated output.   |
+| Zig `std.base64`   | encode and decode | no                | Direct wrapper calls `std.base64.standard` slice functions.                |
+
+Aklomp and GNU Coreutils may expose whole-buffer library functions, but their selected binaries are streaming commands, so they are not placed in the memory suites. Adding a memory adapter is a separate benchmark target and requires its own release build and byte qualification. The current memory wrappers are not reused in streaming suites.
 
 ## Excluded from the default peer set
 

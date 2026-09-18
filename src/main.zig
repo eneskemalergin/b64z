@@ -2,6 +2,7 @@
 
 const std = @import("std");
 const base64 = @import("base64.zig");
+const builtin = @import("builtin");
 
 const Io = std.Io;
 const VERSION = "0.1.0";
@@ -419,7 +420,10 @@ fn writeBytes(io: Io, data: []const u8) !void {
 fn printVersion(io: Io) !void {
     var buffer: [64]u8 = undefined;
     var stdout = std.Io.File.stdout().writer(io, &buffer);
-    try stdout.interface.print("custom-base64 {s} backend={s}\n", .{ VERSION, @tagName(base64.BACKEND) });
+    try stdout.interface.print(
+        "custom-base64 {s} backend={s} optimize={s} target={s}\n",
+        .{ VERSION, @tagName(base64.BACKEND), @tagName(builtin.mode), @tagName(builtin.target.cpu.arch) },
+    );
     try stdout.interface.flush();
 }
 

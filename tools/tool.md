@@ -4,7 +4,7 @@ Status: **Active** (last updated: 2026-09-19)
 
 ## Purpose
 
-`tools/` contains locally built peer executables used by Base64 comparisons. The source checkouts, build directories, Rust target directories, and binaries are ignored by design. They must not add file copies, shell pipelines, logging, checksums, compression, or text conversion to a timed job.
+`tools/` contains peer selection, build rules, and small adapters used by Base64 comparisons. A timed command must run the selected peer directly. It must not add file copies, shell pipelines, logging, checksums, compression, or text conversion.
 
 Every peer receives the same raw input files and writes Base64 bytes to stdout. Keep a peer in speed comparisons only after its output matches the valid fixture bytes. A peer that accepts a wider invalid-input grammar remains a documented compatibility difference, not a failed speed row.
 
@@ -17,7 +17,7 @@ Every peer receives the same raw input files and writes Base64 bytes to stdout. 
 - Selection: SIMD stream codec with runtime x86 selection and a standalone `base64` utility.
 - Checkout: current upstream `master`, with the commit recorded by `git rev-parse` when built.
 - Build: the upstream `make` target.
-- Binary: `tools/bin/aklomp-base64`.
+- Executable: the locally built Aklomp command.
 - Encode command: `--wrap=0 INPUT`.
 - Decode command: `--decode --no-strip-newlines INPUT`.
 - Built commit: `bf058e571ac5002b75b03fed38e33ed4e8d45eff`.
@@ -33,7 +33,7 @@ This is the external byte reference for canonical valid inputs and the first C S
 - Language: C++17.
 - Selection: the project ships a dedicated `fastbase64` command and documents SIMD paths across x86, ARM, POWER, RISC-V, and other targets.
 - Build: Release CMake build with the upstream CPU dispatch, followed by a small C++ adapter linked to the simdutf Base64 library.
-- Binary: `tools/bin/simdutf-fastbase64`.
+- Executable: the locally built simdutf command.
 - Encode command: `INPUT`.
 - Decode command: `--decode INPUT`.
 - Adapter source: `tools/wrappers/simdutf_base64.cpp`.
@@ -47,11 +47,11 @@ This is the external byte reference for canonical valid inputs and the first C S
 - Language: C.
 - Selection: common utility baseline with a separate encode/decode executable and predictable file arguments.
 - Build: Release source build with `configure` and `make`; the generated release files included in the source tarball are used because this host does not have the archive's maintainer tools (`aclocal-1.18`, `autoconf`, and `automake-1.18`).
-- Binary: `tools/bin/coreutils-base64`.
+- Executable: the locally built GNU Coreutils command.
 - Encode command: `-w 0 INPUT`.
 - Decode command: `--decode INPUT`.
 - Difference: GNU decoding is more permissive than B64Z decoding.
-- License note: GPLv3; keep this binary under ignored local tool paths.
+- License: GPLv3.
 
 ### Turbo-Base64
 
@@ -60,12 +60,12 @@ This is the external byte reference for canonical valid inputs and the first C S
 - Language: C with C++ headers.
 - Selection: a fast SIMD implementation with scalar, SSE, AVX2, AVX512, NEON, and Altivec paths.
 - Build: the upstream `make -f makefile` target plus a small file adapter around `tb64enc` and `tb64dec`.
-- Binary: `tools/bin/turbo-base64`.
+- Executable: the locally built Turbo-Base64 command.
 - Adapter source: `tools/wrappers/turbo_base64.c`.
 - Encode command: `INPUT`.
 - Decode command: `--decode INPUT`.
 - Difference: the upstream API reports `0` for an empty decode and has its own error rules. Use it for valid-byte throughput after qualification, not as the strict invalid-input reference.
-- License note: GPLv3 with a commercial license path; keep this binary under ignored local tool paths.
+- License: GPLv3 with a commercial license path.
 
 ### Rust `base64`
 
@@ -74,7 +74,7 @@ This is the external byte reference for canonical valid inputs and the first C S
 - Language: Rust.
 - Selection: current crate release with the `Simd` engine, which selects AVX2 on x86-64 and NEON on AArch64 at runtime before falling back to the scalar engine.
 - Build: Cargo `--release` with fat LTO, one codegen unit, and the crate's default runtime SIMD detection.
-- Binary: `tools/bin/rust-base64-simd`.
+- Executable: the locally built Rust base64 command.
 - Adapter: a direct file-to-stdout wrapper that uses the preallocated slice APIs for memory mode.
 
 ### Rust `base64-simd`
@@ -84,7 +84,7 @@ This is the external byte reference for canonical valid inputs and the first C S
 - Language: Rust.
 - Selection: SIMD Base64 crate with default runtime feature detection.
 - Build: Cargo `--release` with fat LTO, one codegen unit, and default `detect`, `std`, and `alloc` features.
-- Binary: `tools/bin/rust-base64-simd-crate`.
+- Executable: the locally built Rust base64-simd command.
 - Adapter: a direct file-to-stdout wrapper using preallocated `encode` and `decode` output slices.
 
 The first Rust row measures the current SIMD engine in the widely used general crate. The second measures a focused SIMD crate with a different allocation API.
@@ -95,17 +95,14 @@ The first Rust row measures the current SIMD engine in the widely used general c
 - Language: Zig.
 - Selection: standard-library reference peer, not a second copy of B64Z.
 - Build: `zig build-exe -O ReleaseFast -Dcpu=native` for the local adapter.
-- Binary: `tools/bin/zig-std-base64`.
+- Executable: the locally built Zig standard-library command.
 - Adapter: a direct file-to-stdout wrapper around `std.base64.standard`.
 - Difference: standard-library padding and error behavior are recorded separately from B64Z strict behavior.
 
-## Build locations
+## Adapter source
 
 ```text
 tools/
-  bin/                         local peer executables
-  build/                       C and C++ build trees
-  src/                         upstream source checkouts
   base64_data.py               fixture and benchmark data generator
   peer_check.py                fixture and benchmark byte checks for all peers
   wrappers/                    small source adapters
@@ -117,23 +114,23 @@ tools/
   tool.md                      peer choices and build rules
 ```
 
-The existing ignore rules cover `tools/bin/`, `tools/src/`, `tools/build/`, `tools/venv/`, and Rust `tools/wrappers/target/` output. Adapter source files remain visible so their I/O behavior can be reviewed.
+The adapter source files listed above are tracked so their file I/O and allocation rules can be reviewed.
 
-Each Rust adapter has one `Cargo.toml` and one Cargo-generated `Cargo.lock` because Cargo needs package metadata and locked dependency versions. The lock files' registry checksums belong to Cargo dependency resolution; they are not fixture, binary, or benchmark fingerprints. The data directory has no manifest or per-file digest list.
+Each Rust adapter has one `Cargo.toml` and one Cargo-generated `Cargo.lock` because Cargo needs package metadata and locked dependency versions. The lock files' registry checksums belong to Cargo dependency resolution.
 
 ## Local checks
 
 ```text
 python3 tools/peer_check.py
 python3 tools/peer_check.py --bench
-python3 tools/peer_check.py --bench --reference tools/bin/aklomp-base64
+python3 tools/peer_check.py --bench --reference /path/to/aklomp-base64
 ```
 
-The first command checks the 14 valid fixture pairs. `--bench` also checks the 25 benchmark inputs. Without `--reference`, benchmark expected bytes come from the current B64Z executable, so a repeated check does not start Aklomp. The last command runs one external Aklomp byte check for every benchmark input.
+The first command checks the canonical valid byte pairs. `--bench` also checks the benchmark inputs. Without `--reference`, benchmark expected bytes come from the current B64Z executable. The last command runs one external Aklomp byte check for every benchmark input.
 
 The peer commands write directly to redirected stdout. `peer_check.py` invokes each process with an argument list and compares files with a byte comparison; it does not use shell pipelines, hashes, or an intermediate text conversion. Its one-iteration B64Z `--raw` command also skips the report probe.
 
-The current invalid fixture run found these accepted cases: Aklomp accepted `missing-padding`, `nonzero-tail-one`, `nonzero-tail-two`, and `single-character`; simdutf accepted `missing-padding`, `nonzero-tail-one`, `nonzero-tail-two`, and `whitespace`; Coreutils accepted `missing-padding` and `whitespace`; Turbo-Base64 accepted `internal-padding`, `invalid-character`, `misplaced-padding`, `nonzero-tail-one`, `nonzero-tail-two`, and `url-safe-alphabet`; Rust `base64`, Rust `base64-simd`, and Zig `std.base64` rejected all 10 invalid fixtures. These results describe the current executables and do not change the valid-byte checks.
+The invalid-input check found these accepted cases: Aklomp accepted `missing-padding`, `nonzero-tail-one`, `nonzero-tail-two`, and `single-character`; simdutf accepted `missing-padding`, `nonzero-tail-one`, `nonzero-tail-two`, and `whitespace`; Coreutils accepted `missing-padding` and `whitespace`; Turbo-Base64 accepted `internal-padding`, `invalid-character`, `misplaced-padding`, `nonzero-tail-one`, `nonzero-tail-two`, and `url-safe-alphabet`; Rust `base64`, Rust `base64-simd`, and Zig `std.base64` rejected all 10 invalid inputs. These results describe the current executables and do not change the valid-byte checks.
 
 ## Build and qualification rules
 
@@ -142,24 +139,24 @@ The current invalid fixture run found these accepted cases: Aklomp accepted `mis
 3. Use direct file arguments. Do not run `cat`, `dd`, shell substitutions, compression, decompression, or a second process in the timed command.
 4. Write raw output directly to stdout. The peer runner redirects stdout to its comparison file.
 5. Keep diagnostics on stderr and keep normal stdout byte-clean.
-6. Qualify encode and decode bytes against `data/fixture/valid/*.b64` and `data/fixture/valid/*.bin` before measuring speed.
+6. Qualify encode and decode bytes against canonical valid inputs before measuring speed.
 7. Run the same benchmark input through every peer selected for that mode. Record the mode, input path, build mode, compiler, CPU target, source version, and accepted-input differences.
 8. Do not compare a peer's malformed-input behavior as a speed row unless its accepted grammar is the same as B64Z's grammar.
-9. Strip retained copies in `tools/bin/` after building; build trees remain available under ignored `tools/build/` and `tools/src/` paths.
+9. Strip retained peer executables after building.
 
-This pass builds and byte-qualifies the peer executables. The two benchmark targets use these binaries only after their own byte checks pass. Each report records the command, input path, build flags, CPU target, source version, and output comparison.
+Each benchmark target uses a peer only after its byte checks pass. Each report records the command label, input size, build flags, CPU target, source version, and output comparison.
 
-`tools/base64_data.py` verifies B64Z and Aklomp and maintains the small local benchmark cache. The cache uses file size, modification time, encoded length, and a direct B64Z round trip. It does not store a digest or output fingerprint. `tools/peer_check.py` qualifies every peer without moving external tools into the Zig test executable.
+`tools/base64_data.py` prepares canonical encoded inputs for the benchmark runner. `tools/peer_check.py` qualifies every peer without moving external tools into the Zig test executable.
 
 ## Benchmark runner
 
 `bench/run.sh` is the single common entrypoint. `bench/linux-x86-avx2/run.sh` builds `ReleaseFast` with `-Dcpu=haswell`; `bench/linux-x86-scalar/run.sh` builds `ReleaseFast` with `-Dcpu=x86_64`. Both write their binary, measurements, summary, and figures under their target folder.
 
-The runner keeps one operation and one input in each Zebrac group. It measures `encode-memory`, `encode-streaming`, `decode-memory`, and `decode-streaming` as separate suites. It generates the canonical encoded decode inputs under ignored `bench/work/` before timing.
+The runner keeps one operation and one input in each Zebrac group. It measures `encode-memory`, `encode-streaming`, `decode-memory`, and `decode-streaming` as separate suites. It prepares canonical encoded decode inputs before timing.
 
 The runner includes a peer command only when that executable has a qualified path for the selected mode. A direct wrapper around a library's slice API qualifies for a memory suite; it does not qualify for a streaming suite unless it calls a stateful streaming API. The reports therefore compare complete commands without presenting a memory wrapper as a streaming implementation.
 
-The current measurement process is Linux-only because Zebrac uses `perf_event_open`. The report records the machine architecture, CPU count, CPU governor, kernel, Git commit, B64Z backend, and selected peer versions. The two target reports remain separate because their B64Z binaries use different CPU code.
+The current measurement process is Linux-only because Zebrac uses `perf_event_open`. The report records the machine architecture, CPU count, CPU governor, kernel, Git commit, B64Z backend, compiler versions, and selected peer versions. The two target reports remain separate because their B64Z builds use different CPU code.
 
 ```sh
 bash bench/linux-x86-avx2/run.sh
@@ -170,15 +167,15 @@ bash bench/linux-x86-scalar/run.sh
 
 The current peer executables have this mode coverage:
 
-| Peer executable    | Memory suites     | Streaming suites  | Executable path                                                            |
+| Peer               | Memory suites     | Streaming suites  | How it is run                                                              |
 | ------------------ | ----------------- | ----------------- | -------------------------------------------------------------------------- |
 | Aklomp             | no                | encode and decode | Upstream CLI uses Aklomp stateful stream functions.                        |
-| simdutf            | encode and decode | no                | Direct wrapper calls the library slice functions with preallocated output. |
+| simdutf            | encode and decode | no                | Direct adapter calls the library slice functions with preallocated output. |
 | GNU Coreutils      | no                | encode and decode | Upstream `base64` command processes input in chunks.                       |
-| Turbo-Base64       | encode and decode | no                | Direct wrapper calls the library buffer functions.                         |
-| Rust `base64`      | encode and decode | no                | Direct wrapper calls the crate slice functions with preallocated output.   |
-| Rust `base64-simd` | encode and decode | no                | Direct wrapper calls the crate slice functions with preallocated output.   |
-| Zig `std.base64`   | encode and decode | no                | Direct wrapper calls `std.base64.standard` slice functions.                |
+| Turbo-Base64       | encode and decode | no                | Direct adapter calls the library buffer functions.                         |
+| Rust `base64`      | encode and decode | no                | Direct adapter calls the crate slice functions with preallocated output.   |
+| Rust `base64-simd` | encode and decode | no                | Direct adapter calls the crate slice functions with preallocated output.   |
+| Zig `std.base64`   | encode and decode | no                | Direct adapter calls `std.base64.standard` slice functions.                |
 
 Aklomp and GNU Coreutils may expose whole-buffer library functions, but their selected binaries are streaming commands, so they are not placed in the memory suites. Adding a memory adapter is a separate benchmark target and requires its own release build and byte qualification. The current memory wrappers are not reused in streaming suites.
 

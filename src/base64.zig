@@ -217,16 +217,20 @@ pub fn encodeInPlace(buffer: []u8, input_len: usize) Error!usize {
 
 /// Stateful encoder for callers that receive input in arbitrary chunks.
 /// `update` emits complete groups and `final` emits the padded tail. The input
-/// and output slices passed to `update` must be disjoint.
+/// and output slices passed to `update` must be disjoint. If `update` or
+/// `updateByte` returns `error.NoSpaceLeft`, it leaves the encoder, input, and
+/// output unchanged so the caller can retry with a larger output slice.
 pub const Encoder = struct {
     carry: [3]u8 = undefined,
     carry_len: usize = 0,
 
     pub fn updateByte(self: *Encoder, byte: u8, output_slice: []u8) Error!usize {
+        const required: usize = if (self.carry_len == 2 or self.carry_len == 3) 4 else 0;
+        if (output_slice.len < required) return error.NoSpaceLeft;
+
         var output = output_slice;
         var output_index: usize = 0;
         if (self.carry_len == 3) {
-            if (output.len < 4) return error.NoSpaceLeft;
             encodeTriple(&self.carry, output[0..4]);
             self.carry_len = 0;
             output_index = 4;
@@ -235,13 +239,15 @@ pub const Encoder = struct {
         self.carry[self.carry_len] = byte;
         self.carry_len += 1;
         if (self.carry_len != 3) return output_index;
-        if (output.len < 4) return error.NoSpaceLeft;
         encodeTriple(&self.carry, output[0..4]);
         self.carry_len = 0;
         return output_index + 4;
     }
 
     pub fn update(self: *Encoder, input: []const u8, output: []u8) Error!usize {
+        const required = try encoderUpdateOutputSize(self.carry_len, input.len);
+        if (output.len < required) return error.NoSpaceLeft;
+
         var input_index: usize = 0;
         var output_index: usize = 0;
         if (self.carry_len != 0) {
@@ -251,7 +257,6 @@ pub const Encoder = struct {
                 input_index += 1;
             }
             if (self.carry_len == 3) {
-                if (output.len < 4) return error.NoSpaceLeft;
                 encodeTriple(&self.carry, output[0..4]);
                 output_index = 4;
                 self.carry_len = 0;
@@ -284,17 +289,31 @@ pub const Encoder = struct {
 
 /// Stateful strict decoder for callers that receive encoded input in arbitrary chunks.
 /// Padding is held until `final`, so a padded group cannot be accepted before EOF.
-/// The input and output slices passed to `update` must be disjoint.
+/// The input and output slices passed to `update` must be disjoint. If `update`
+/// or `updateByte` returns `error.NoSpaceLeft`, it leaves the decoder, input,
+/// and output unchanged so the caller can retry with a larger output slice.
 pub const Decoder = struct {
     carry: [4]u8 = undefined,
     carry_len: usize = 0,
 
     pub fn updateByte(self: *Decoder, byte: u8, output_slice: []u8) Error!usize {
+        var preview = self.carry;
+        var preview_len = self.carry_len;
+        var required: usize = 0;
+        if (preview_len == 4) {
+            if (groupHasPadding(&preview)) return error.InvalidPadding;
+            required = 3;
+            preview_len = 0;
+        }
+        preview[preview_len] = byte;
+        preview_len += 1;
+        if (preview_len == 4 and !groupHasPadding(&preview)) required += 3;
+        if (output_slice.len < required) return error.NoSpaceLeft;
+
         var output = output_slice;
         var output_index: usize = 0;
         if (self.carry_len == 4) {
             if (groupHasPadding(&self.carry)) return error.InvalidPadding;
-            if (output.len < 3) return error.NoSpaceLeft;
             try decodePlainGroup(&self.carry, output[0..3]);
             self.carry_len = 0;
             output_index = 3;
@@ -304,13 +323,15 @@ pub const Decoder = struct {
         self.carry_len += 1;
         if (self.carry_len != 4) return output_index;
         if (groupHasPadding(&self.carry)) return output_index;
-        if (output.len < 3) return error.NoSpaceLeft;
         try decodePlainGroup(&self.carry, output[0..3]);
         self.carry_len = 0;
         return output_index + 3;
     }
 
     pub fn update(self: *Decoder, input: []const u8, output: []u8) Error!usize {
+        const required = try decoderUpdateOutputSize(self, input);
+        if (output.len < required) return error.NoSpaceLeft;
+
         var input_index: usize = 0;
         var output_index: usize = 0;
         if (self.carry_len != 0) {
@@ -324,7 +345,6 @@ pub const Decoder = struct {
                 if (input_index != input.len) return error.InvalidPadding;
                 return 0;
             }
-            if (output.len < 3) return error.NoSpaceLeft;
             try decodePlainGroup(&self.carry, output[0..3]);
             output_index = 3;
             self.carry_len = 0;
@@ -372,6 +392,53 @@ pub const Decoder = struct {
         return written;
     }
 };
+
+fn encoderUpdateOutputSize(carry_len: usize, input_len: usize) Error!usize {
+    if (input_len > std.math.maxInt(usize) - carry_len) return error.InputTooLarge;
+    const complete_groups = (carry_len + input_len) / 3;
+    if (complete_groups > std.math.maxInt(usize) / 4) return error.InputTooLarge;
+    return complete_groups * 4;
+}
+
+fn decoderUpdateOutputSize(decoder: *const Decoder, input: []const u8) Error!usize {
+    var input_index: usize = 0;
+    var carry_len = decoder.carry_len;
+    var output_len: usize = 0;
+    var preview = decoder.carry;
+
+    if (carry_len != 0) {
+        while (carry_len < 4 and input_index < input.len) {
+            preview[carry_len] = input[input_index];
+            carry_len += 1;
+            input_index += 1;
+        }
+        if (carry_len < 4) return 0;
+        if (groupHasPadding(&preview)) {
+            if (input_index != input.len) return error.InvalidPadding;
+            return 0;
+        }
+        output_len = try addDecodedGroups(output_len, 1);
+        carry_len = 0;
+    }
+
+    const remaining = input.len - input_index;
+    const full_len = remaining / 4 * 4;
+    const full = input[input_index..][0..full_len];
+    if (std.mem.indexOfScalar(u8, full, PAD)) |padding_index| {
+        const padding_group_index = padding_index / 4 * 4;
+        if (padding_group_index + 4 != full_len or full_len != remaining) {
+            return error.InvalidPadding;
+        }
+        return addDecodedGroups(output_len, padding_group_index / 4);
+    }
+
+    return addDecodedGroups(output_len, full_len / 4);
+}
+
+fn addDecodedGroups(output_len: usize, groups: usize) Error!usize {
+    if (groups > std.math.maxInt(usize) / 3) return error.InputTooLarge;
+    return std.math.add(usize, output_len, groups * 3) catch error.InputTooLarge;
+}
 
 fn slicesOverlap(a: []const u8, b: []const u8) bool {
     if (a.len == 0 or b.len == 0) return false;

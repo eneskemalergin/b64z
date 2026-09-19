@@ -86,6 +86,47 @@ test "[failure] - [buffers]: rejects short and overlapping output slices" {
     try std.testing.expectError(error.OverlappingBuffers, base64.decode(shared[0..4], shared[0..2]));
 }
 
+test "[failure] - [streaming]: update retries after NoSpaceLeft" {
+    var output = [_]u8{0xaa} ** 4;
+
+    var encoder: base64.Encoder = .{};
+    try std.testing.expectEqual(@as(usize, 0), try encoder.update("f", output[0..0]));
+    try std.testing.expectError(error.NoSpaceLeft, encoder.update("oo", output[0..3]));
+    try std.testing.expectEqualSlices(u8, &([_]u8{0xaa} ** 4), &output);
+    try std.testing.expectEqual(@as(usize, 4), try encoder.update("oo", &output));
+    try std.testing.expectEqualSlices(u8, "Zm9v", &output);
+
+    output = [_]u8{0xaa} ** 4;
+    var decoder: base64.Decoder = .{};
+    try std.testing.expectEqual(@as(usize, 0), try decoder.update("Z", output[0..0]));
+    try std.testing.expectError(error.NoSpaceLeft, decoder.update("m9v", output[0..2]));
+    try std.testing.expectEqualSlices(u8, &([_]u8{0xaa} ** 4), &output);
+    try std.testing.expectEqual(@as(usize, 3), try decoder.update("m9v", output[0..3]));
+    try std.testing.expectEqualSlices(u8, "foo", output[0..3]);
+}
+
+test "[failure] - [streaming]: byte update retries after NoSpaceLeft" {
+    var output = [_]u8{0xaa} ** 4;
+
+    var encoder: base64.Encoder = .{};
+    try std.testing.expectEqual(@as(usize, 0), try encoder.updateByte('f', output[0..0]));
+    try std.testing.expectEqual(@as(usize, 0), try encoder.updateByte('o', output[0..3]));
+    try std.testing.expectError(error.NoSpaceLeft, encoder.updateByte('o', output[0..3]));
+    try std.testing.expectEqualSlices(u8, &([_]u8{0xaa} ** 4), &output);
+    try std.testing.expectEqual(@as(usize, 4), try encoder.updateByte('o', &output));
+    try std.testing.expectEqualSlices(u8, "Zm9v", &output);
+
+    output = [_]u8{0xaa} ** 4;
+    var decoder: base64.Decoder = .{};
+    try std.testing.expectEqual(@as(usize, 0), try decoder.updateByte('Z', output[0..0]));
+    try std.testing.expectEqual(@as(usize, 0), try decoder.updateByte('m', output[0..0]));
+    try std.testing.expectEqual(@as(usize, 0), try decoder.updateByte('9', output[0..0]));
+    try std.testing.expectError(error.NoSpaceLeft, decoder.updateByte('v', output[0..2]));
+    try std.testing.expectEqualSlices(u8, &([_]u8{0xaa} ** 4), &output);
+    try std.testing.expectEqual(@as(usize, 3), try decoder.updateByte('v', output[0..3]));
+    try std.testing.expectEqualSlices(u8, "foo", output[0..3]);
+}
+
 test "[failure] - [decoder]: rejects malformed, noncanonical, and wrapped input" {
     const cases = [_]struct { input: []const u8, expected: anyerror }{
         .{ .input = "A", .expected = error.InvalidPadding },

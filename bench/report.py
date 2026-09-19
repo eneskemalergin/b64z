@@ -26,6 +26,7 @@ BENCH_DATA_ROOT = DATA_ROOT / "bench"
 FIXTURE_ROOT = DATA_ROOT / "fixture"
 WORK_ROOT = BENCH_ROOT / "work"
 REFERENCE_BINARY = ROOT / "tools" / "bin" / "aklomp-base64"
+REFERENCE_CACHE = WORK_ROOT / "inputs" / "reference.cache"
 
 MODES = (
     "encode-memory",
@@ -340,11 +341,39 @@ def current_encoded(case: Case) -> bool:
     )
 
 
+def reference_signature() -> str:
+    stat = REFERENCE_BINARY.stat()
+    return f"{stat.st_size}:{stat.st_mtime_ns}"
+
+
+def current_reference_cache(cases: Iterable[Case]) -> bool:
+    try:
+        lines = REFERENCE_CACHE.read_text(encoding="utf-8").splitlines()
+    except (FileNotFoundError, OSError):
+        return False
+    return (
+        lines == [f"reference={reference_signature()}"]
+        and all(current_encoded(case) for case in cases)
+    )
+
+
+def write_reference_cache() -> None:
+    REFERENCE_CACHE.parent.mkdir(parents=True, exist_ok=True)
+    temporary = REFERENCE_CACHE.with_name(f".{REFERENCE_CACHE.name}.{os.getpid()}.tmp")
+    try:
+        temporary.write_text(f"reference={reference_signature()}\n", encoding="utf-8")
+        temporary.replace(REFERENCE_CACHE)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
 def prepare_inputs(cases: Iterable[Case]) -> int:
+    cases = tuple(cases)
+    if current_reference_cache(cases):
+        return 0
+
     generated = 0
     for case in cases:
-        if current_encoded(case):
-            continue
         case.encoded_path.parent.mkdir(parents=True, exist_ok=True)
         temporary = case.encoded_path.with_name(
             f".{case.encoded_path.name}.{os.getpid()}.tmp"
@@ -363,6 +392,7 @@ def prepare_inputs(cases: Iterable[Case]) -> int:
             if temporary.exists():
                 temporary.unlink()
         generated += 1
+    write_reference_cache()
     return generated
 
 
@@ -394,6 +424,24 @@ def command_text(command: list[str]) -> str:
         else:
             display.append(token)
     return shlex.join(display)
+
+
+def public_command_text(tool: str, mode: str) -> str:
+    if tool == "b64z":
+        return shlex.join(
+            [
+                "B64Z",
+                "--mode",
+                mode,
+                "--chunk",
+                str(CHUNKS[mode]),
+                "--raw",
+                "INPUT",
+            ]
+        )
+    peer = PEER_BY_ID[tool]
+    args = peer.decode_args if mode.startswith("decode-") else peer.encode_args
+    return shlex.join([tool, *args, "INPUT"])
 
 
 def compare_output(
@@ -552,6 +600,17 @@ def git_value(args: list[str]) -> str:
     return result.stdout.decode(errors="replace").strip() if result.returncode == 0 else "unknown"
 
 
+def git_has_changes() -> bool:
+    result = subprocess.run(
+        ["git", "status", "--porcelain", "--untracked-files=all"],
+        cwd=ROOT,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        check=False,
+    )
+    return result.returncode != 0 or bool(result.stdout.strip())
+
+
 def environment_metadata(
     target: Target,
     zebrac: Path,
@@ -572,9 +631,6 @@ def environment_metadata(
         governor = governor_path.read_text(encoding="utf-8").strip()
     except OSError:
         governor = "unknown"
-    tracked_changes = subprocess.run(
-        ["git", "diff", "--quiet", "HEAD", "--"], cwd=ROOT, check=False
-    ).returncode != 0
     return {
         "generated_utc": generated_utc,
         "target": target.id,
@@ -583,13 +639,19 @@ def environment_metadata(
         "zig_version": version_text(["zig", "version"]),
         "zebrac_version": version_text([str(zebrac), "--version"]),
         "gnuplot_version": version_text(["gnuplot", "--version"]),
+        "gcc_version": version_text(["gcc", "--version"]),
+        "clang_version": version_text(["clang", "--version"]),
+        "rustc_version": version_text(["rustc", "--version"]),
+        "cargo_version": version_text(["cargo", "--version"]),
+        "cmake_version": version_text(["cmake", "--version"]),
+        "make_version": version_text(["make", "--version"]),
         "kernel": platform.release(),
         "architecture": platform.machine(),
         "cpu_model": model,
         "cpu_count": str(os.cpu_count() or "unknown"),
         "cpu_governor": governor,
-        "git_commit": git_value(["rev-parse", "--short", "HEAD"]),
-        "git_tracked_changes": "yes" if tracked_changes else "no",
+        "git_commit": git_value(["rev-parse", "HEAD"]),
+        "git_changes": "yes" if git_has_changes() else "no",
         "input_preparation": preparation,
         "verification": verification,
     }
@@ -711,7 +773,7 @@ def measure(
             data = run_zebrac(zebrac, commands, raw_path, runs, warmup, duration_ms)
             for (tool, command), item in zip(specs, data["results"], strict=True):
                 measurements.append(
-                    to_measurement(mode, case, tool, command_text(command), item)
+                    to_measurement(mode, case, tool, public_command_text(tool, mode), item)
                 )
             completed += 1
             print(f"measured {completed}/{total} {mode} {case.id}")
@@ -928,6 +990,13 @@ def run_gnuplot(script: str) -> None:
         script_path.unlink(missing_ok=True)
 
 
+def normalize_svg(path: Path) -> None:
+    lines = [line.rstrip() for line in path.read_text(encoding="utf-8").splitlines()]
+    while lines and not lines[-1]:
+        lines.pop()
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
 def terminal_script(output: Path, body: str) -> str:
     svg = output.with_suffix(".svg")
     png = output.with_suffix(".png")
@@ -1109,7 +1178,9 @@ def render_figures(
         scaling_paths = write_scaling_data(rows, plot_data)
         isocost_paths = write_isocost_data(summary, plot_data)
         run_gnuplot(terminal_script(output / "scaling", scaling_body(scaling_paths)))
+        normalize_svg(output / "scaling.svg")
         run_gnuplot(terminal_script(output / "isocost", isocost_body(summary, isocost_paths)))
+        normalize_svg(output / "isocost.svg")
 
 
 def format_ratio(value: float) -> str:
@@ -1220,11 +1291,11 @@ def report_text(
             "",
             "![Speed and memory ratios](figures/isocost.svg)",
             "",
-            "PNG copies are in [`figures/`](figures/) for local use.",
+            "PNG versions are included beside the SVG figures.",
             "",
             "## What was measured",
             "",
-            "Each command reads one file and writes Base64 or decoded bytes to stdout. Zebrac discards child stdout, so output comparison is separate from the timed command. Process startup, file reads, allocation, encoding or decoding, and stdout writes are included in the measured process.",
+            "Each row starts one named command for one input. The command reads a file and writes Base64 or decoded bytes to standard output. Zebrac discards child output during timing, so byte comparison runs before measurement. Process startup, file reads, allocation, encoding or decoding, and standard-output writes are included in the measured process.",
             "",
             f"Zebrac ran `{metadata.get('samples', 'unknown')}` measured samples after `{metadata.get('warmup', 'unknown')}` warmups, with a `{metadata.get('duration_ms', 'unknown')} ms` duration ceiling and an exact maximum sample count. Every recorded command has zero failed samples.",
             "",
@@ -1240,23 +1311,21 @@ def report_text(
             "",
             "The benchmark contains 25 byte inputs: 5 general inputs, 10 float32 mzML payload inputs, and 10 float64 mzML payload inputs. Each family has tiny, small, medium, large, and huge sizes at 256 B, 16 KiB, 1 MiB, 8 MiB, and 32 MiB. The zlib files are compressed payload bytes, not XML documents.",
             "",
-            "Decode rows read generated canonical Base64 files under `bench/work/inputs/encoded/`. Their size and modification time are checked before reuse. No digest list or per-input manifest is used.",
-            "",
             "## Tools and versions",
             "",
-            "| Tool | Selected modes | Version or build | Executable |",
-            "| --- | --- | --- | --- |",
-            f"| B64Z | all four | `{metadata.get('b64z_version', 'unknown')}`; `zig -Dcpu={target.cpu} -Doptimize=ReleaseFast -Dstrip=true` | `{relative(target.binary)}` |",
+            "| Tool | Selected modes | Version or build |",
+            "| --- | --- | --- |",
+            f"| B64Z | all four | `{metadata.get('b64z_version', 'unknown')}`; `zig -Dcpu={target.cpu} -Doptimize=ReleaseFast -Dstrip=true` |",
         ]
     )
     for peer in PEERS:
         lines.append(
-            f"| {peer.label} | {', '.join(peer.modes)} | `{peer.version}` | `{relative(peer.executable)}` |"
+            f"| {peer.label} | {', '.join(peer.modes)} | `{peer.version}` |"
         )
     lines.extend(
         [
             "",
-            "The Aklomp and GNU Coreutils command rows are streaming rows because those selected executables expose file-processing commands, not the memory adapters used by the other peers. The Rust, simdutf, Turbo-Base64, and Zig rows use the local direct file adapters listed in `tools/tool.md`.",
+            "Aklomp and GNU Coreutils appear only in streaming rows because their selected commands process files incrementally. simdutf, Turbo-Base64, Rust base64, Rust base64-simd, and Zig std.base64 appear only in memory rows because their selected adapters allocate complete input and output buffers.",
             "",
         ]
     )
@@ -1267,16 +1336,17 @@ def report_text(
             "",
             f"- Host: `{metadata.get('cpu_model', 'unknown')}`, `{metadata.get('architecture', 'unknown')}`, `{metadata.get('cpu_count', 'unknown')} logical CPUs`.",
             f"- Kernel: `{metadata.get('kernel', 'unknown')}`; CPU governor: `{metadata.get('cpu_governor', 'unknown')}`.",
-            f"- Git commit: `{metadata.get('git_commit', 'unknown')}`; tracked changes at measurement time: `{metadata.get('git_tracked_changes', 'unknown')}`.",
+            f"- Git commit: `{metadata.get('git_commit', 'unknown')}`; worktree changes at measurement time: `{metadata.get('git_changes', 'unknown')}`.",
             f"- Runner: `{metadata.get('zebrac_version', 'unknown')}`; gnuplot: `{metadata.get('gnuplot_version', 'unknown')}`; Zig: `{metadata.get('zig_version', 'unknown')}`.",
+            f"- Host tools: GCC `{metadata.get('gcc_version', 'unknown')}`; Clang `{metadata.get('clang_version', 'unknown')}`; Rust `{metadata.get('rustc_version', 'unknown')}`; Cargo `{metadata.get('cargo_version', 'unknown')}`; CMake `{metadata.get('cmake_version', 'unknown')}`; Make `{metadata.get('make_version', 'unknown')}`.",
             "- The file cache is warm after verification. The runner does not pin processes to a CPU or flush the page cache.",
-            "- These numbers describe the named local binaries on this host. They do not describe a peer library without its command adapter or a different compiler build.",
+            "- These numbers describe the named commands, adapters, and builds on this host. They do not describe a peer library without its command adapter or a different compiler build.",
+            "- The target choice changes the B64Z build only. Peer binaries keep their own native build and runtime dispatch settings. The scalar page is not a scalar-for-every-peer instruction-set test.",
             "",
             "## Files",
             "",
-            "- [`measurements.tsv`](measurements.tsv) contains one row for every measured command and input, including sample quartiles and the exact command string.",
+            "- [`measurements.tsv`](measurements.tsv) contains one row for every measured command and input, including sample quartiles and a public command label.",
             "- [`summary.tsv`](summary.tsv) contains the values used by the tables and figures.",
-            "- `bench/work/` contains ignored encoded inputs and raw Zebrac JSON for rerendering during local work.",
             "",
             "The report does not produce one report per input. The table and the two figures cover the complete 100 groups without turning each input into a separate publication page.",
             "",
@@ -1292,9 +1362,9 @@ def render(target: Target) -> None:
     write_summary(target_dir / "summary.tsv", summary)
     render_figures(target, rows, summary)
     report = report_text(target, metadata, rows, summary)
-    temporary = target_dir / f".REPORT.md.{os.getpid()}.tmp"
+    temporary = target_dir / f".README.md.{os.getpid()}.tmp"
     temporary.write_text(report, encoding="utf-8")
-    temporary.replace(target_dir / "REPORT.md")
+    temporary.replace(target_dir / "README.md")
 
 
 def run(arguments: argparse.Namespace) -> None:
@@ -1338,7 +1408,7 @@ def run(arguments: argparse.Namespace) -> None:
         )
     if not arguments.skip_report:
         render(target)
-        print(f"report: {target.directory / 'REPORT.md'}")
+        print(f"report: {target.directory / 'README.md'}")
 
 
 def parser() -> argparse.ArgumentParser:

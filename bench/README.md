@@ -5,13 +5,19 @@ This directory contains two retained Linux x86-64 benchmark pages:
 - [`linux-x86-avx2/`](linux-x86-avx2/) measures the `haswell` build with the B64Z AVX2 backend.
 - [`linux-x86-scalar/`](linux-x86-scalar/) measures the `x86_64` build with the B64Z scalar backend.
 
-Each target page contains its result table, SVG and PNG figures, raw measurement table, and summary table.
+Each target page contains its result table, light and dark SVG figures, raw measurement table, and summary table.
 
 ## Compared operations
 
 The four B64Z modes are `encode-memory`, `decode-memory`, `encode-streaming`, and `decode-streaming`.
 
-Memory rows use complete-input adapters. Streaming rows use commands that read and write incrementally. A peer appears only in the mode selected for its command and adapter. Aklomp and GNU Coreutils appear in streaming rows. simdutf, Turbo-Base64, Rust base64, Rust base64-simd, and Zig std.base64 appear in memory rows.
+In a mode name, `memory` means complete-input processing, not the measured memory value. B64Z reads the complete input into an allocated buffer and allocates a complete output buffer. `Streaming` means incremental processing through fixed input and output buffers. A peer appears only in the mode selected for its command and adapter. Aklomp and GNU Coreutils appear in streaming rows. simdutf, Turbo-Base64, Rust base64, Rust base64-simd, and Zig std.base64 appear in memory rows.
+
+`Peak RSS` is the per-sample maximum resident set size reported by Zebrac for the timed process. The reports use the mean of those per-sample peaks. It includes the executable, runtime, file I/O buffers, codec state, and resident input or output allocations. It is not the size of one codec buffer.
+
+## Input sizes
+
+The five size names refer to the raw case bytes: `tiny` is 256 B, `small` is 16 KiB, `medium` is 1 MiB, `large` is 8 MiB, and `huge` is 32 MiB. Decode modes read the corresponding padded Base64 file, which is larger than the raw case. Each size has five forms: general bytes, float32 raw, float32 zlib, float64 raw, and float64 zlib.
 
 ## Method
 
@@ -39,7 +45,8 @@ The scripts require the Linux x86-64 toolchain and local qualification setup des
 - `README.md` explains the target result and method.
 - `measurements.tsv` contains one row for each measured command and case.
 - `summary.tsv` contains the values used by the result table and figures.
-- `figures/scaling.svg` and `figures/scaling.png` show throughput by nominal size.
-- `figures/isocost.svg` and `figures/isocost.png` show time and peak-RSS ratios to B64Z.
+- `figures/scaling-light.svg` and `figures/scaling-dark.svg` show throughput by nominal size.
+- `figures/isocost-light.svg` and `figures/isocost-dark.svg` show one dot per input case, geometric means, peak-RSS ratios to B64Z, and combined-cost curves.
+- `linux-x86-avx2/figures/summary-light.svg` and `linux-x86-avx2/figures/summary-dark.svg` show the AVX2 summary used by the main README.
 
 The pages cover all 100 mode-and-case groups without creating one public page per input.

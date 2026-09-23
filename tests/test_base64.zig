@@ -3,6 +3,8 @@
 const std = @import("std");
 const base64 = @import("base64");
 
+const PROPERTY_SEED = 0x6236345a;
+
 test "[unit] - [encoder]: matches RFC 4648 vectors" {
     const cases = [_]struct { input: []const u8, expected: []const u8 }{
         .{ .input = "", .expected = "" },
@@ -72,6 +74,7 @@ test "[edge] - [size helpers]: report exact empty and padded lengths" {
     try std.testing.expectError(error.InvalidPadding, base64.decodedSize("A"));
     try std.testing.expectError(error.InvalidPadding, base64.decodedSize("A==="));
     try std.testing.expectError(error.InvalidPadding, base64.decodedSize("AA="));
+    try std.testing.expectError(error.InvalidPadding, base64.decodedSize("AA=A"));
     try std.testing.expectError(error.InputTooLarge, base64.encodedSize(std.math.maxInt(usize)));
 }
 
@@ -84,6 +87,18 @@ test "[failure] - [buffers]: rejects short and overlapping output slices" {
     try std.testing.expectError(error.OverlappingBuffers, base64.encode(shared[0..3], shared[0..4]));
     @memcpy(shared[0..4], "Zm8=");
     try std.testing.expectError(error.OverlappingBuffers, base64.decode(shared[0..4], shared[0..2]));
+
+    var encoder: base64.Encoder = .{};
+    try std.testing.expectEqual(@as(usize, 0), try encoder.update("f", &output));
+    try std.testing.expectError(error.OverlappingBuffers, encoder.update(shared[0..3], shared[2..6]));
+    try std.testing.expectEqual(@as(usize, 4), try encoder.update("oo", &output));
+    try std.testing.expectEqualSlices(u8, "Zm9v", output[0..4]);
+
+    var decoder: base64.Decoder = .{};
+    try std.testing.expectEqual(@as(usize, 0), try decoder.update("Z", &output));
+    try std.testing.expectError(error.OverlappingBuffers, decoder.update(shared[0..4], shared[3..6]));
+    try std.testing.expectEqual(@as(usize, 3), try decoder.update("m9v", &output));
+    try std.testing.expectEqualSlices(u8, "foo", output[0..3]);
 }
 
 test "[failure] - [streaming]: update retries after NoSpaceLeft" {
@@ -128,7 +143,7 @@ test "[failure] - [streaming]: byte update retries after NoSpaceLeft" {
 }
 
 test "[failure] - [decoder]: rejects malformed, noncanonical, and wrapped input" {
-    const cases = [_]struct { input: []const u8, expected: anyerror }{
+    const cases = [_]struct { input: []const u8, expected: base64.Error }{
         .{ .input = "A", .expected = error.InvalidPadding },
         .{ .input = "AAA", .expected = error.InvalidPadding },
         .{ .input = "AA", .expected = error.InvalidPadding },
@@ -150,24 +165,28 @@ test "[failure] - [decoder]: rejects malformed, noncanonical, and wrapped input"
     for (cases) |case| try std.testing.expectError(case.expected, base64.decode(case.input, &output));
 }
 
-test "[failure] - [decoder]: rejects invalid bytes in SIMD-sized runs" {
-    var input: [40]u8 = undefined;
-    @memset(&input, 'A');
-    var output: [32]u8 = undefined;
+test "[failure] - [decoder]: reports the first defect in input order" {
+    const cases = [_]struct { input: []const u8, expected: base64.Error }{
+        .{ .input = "AAAA!AAAA", .expected = error.InvalidCharacter },
+        .{ .input = "!AAAA===", .expected = error.InvalidCharacter },
+        .{ .input = "!AAAAA==AAAA", .expected = error.InvalidCharacter },
+        .{ .input = "AAAAAA==A", .expected = error.InvalidPadding },
+        .{ .input = "AAAAA", .expected = error.InvalidPadding },
+        .{ .input = "!" ++ "A" ** 19 ++ "=" ++ "A" ** 15, .expected = error.InvalidCharacter },
+    };
 
-    input[17] = '#';
-    try std.testing.expectError(error.InvalidCharacter, base64.decode(&input, &output));
-    input[17] = '=';
-    try std.testing.expectError(error.InvalidPadding, base64.decode(&input, &output));
+    var output: [64]u8 = undefined;
+    for (cases) |case| try std.testing.expectError(case.expected, base64.decode(case.input, &output));
 }
 
 test "[property] - [in-place]: preserves strict output for every length" {
+    var prng: std.Random.DefaultPrng = .init(PROPERTY_SEED);
     var input: [193]u8 = undefined;
-    for (&input, 0..) |*byte, index| byte.* = @truncate(index * 73 + 19);
-
     var expected: [260]u8 = undefined;
     var work: [260]u8 = undefined;
-    for (0..input.len + 1) |length| {
+    for (0..(input.len + 1) * 16) |case| {
+        const length = case % (input.len + 1);
+        prng.random().bytes(input[0..length]);
         const expected_len = try base64.encode(input[0..length], &expected);
         @memcpy(work[0..length], input[0..length]);
         const encoded_len = try base64.encodeInPlace(&work, length);
@@ -180,6 +199,54 @@ test "[property] - [in-place]: preserves strict output for every length" {
         try std.testing.expectEqualSlices(u8, input[0..length], work[0..decoded_len]);
     }
     try std.testing.expectError(error.NoSpaceLeft, base64.encodeInPlace(work[0..3], 3));
+}
+
+test "[property] - [decoder]: every entry point reports the same result" {
+    var prng: std.Random.DefaultPrng = .init(PROPERTY_SEED);
+    const random = prng.random();
+    var raw: [300]u8 = undefined;
+    var encoded: [404]u8 = undefined;
+
+    for (0..4000) |case| {
+        const raw_len = random.uintAtMost(usize, raw.len);
+        random.bytes(raw[0..raw_len]);
+        var encoded_len = try base64.encode(raw[0..raw_len], &encoded);
+        for (0..random.uintAtMost(usize, 3)) |_| {
+            switch (random.uintLessThan(u8, 4)) {
+                0 => if (encoded_len != 0) {
+                    encoded[random.uintLessThan(usize, encoded_len)] = '=';
+                },
+                1 => if (encoded_len != 0) {
+                    encoded[random.uintLessThan(usize, encoded_len)] = random.int(u8);
+                },
+                2 => encoded_len -|= 1,
+                else => if (encoded_len < encoded.len) {
+                    encoded[encoded_len] = 'A';
+                    encoded_len += 1;
+                },
+            }
+        }
+        const input = encoded[0..encoded_len];
+
+        var expected_output: [303]u8 = undefined;
+        const expected = base64.decode(input, &expected_output);
+        errdefer std.debug.print("seed {d}, case {d}, input {x}\n", .{ PROPERTY_SEED, case, input });
+
+        var in_place: [404]u8 = undefined;
+        @memcpy(in_place[0..input.len], input);
+        const in_place_result = base64.decodeInPlace(in_place[0..input.len]);
+        try expectSameDecode(expected, &expected_output, in_place_result, &in_place);
+
+        var streamed: [303]u8 = undefined;
+        const byte_result = streamDecode(input, .bytes, &streamed);
+        try expectSameDecode(expected, &expected_output, byte_result, &streamed);
+        const whole_result = streamDecode(input, .{ .chunks = @max(input.len, 1) }, &streamed);
+        try expectSameDecode(expected, &expected_output, whole_result, &streamed);
+        for ([_]usize{ 1, 2, 3, 4, 5, 6, 7, 8, 9, 31, 32, 33, 131 }) |chunk_size| {
+            const chunk_result = streamDecode(input, .{ .chunks = chunk_size }, &streamed);
+            try expectSameDecode(expected, &expected_output, chunk_result, &streamed);
+        }
+    }
 }
 
 test "[property] - [decoder]: classifies every byte at every group position" {
@@ -215,15 +282,13 @@ test "[unit] - [decoder]: accepts only canonical final groups" {
     try std.testing.expectEqualSlices(u8, &[_]u8{ 0, 0, 0 }, output[0..3]);
 }
 
-test "[property] - [streaming]: state survives every chunk boundary" {
+test "[property] - [encoder]: state survives every chunk boundary" {
     var input: [193]u8 = undefined;
     for (&input, 0..) |*byte, index| byte.* = @truncate(index * 73 + 19);
 
     var expected_encoded: [260]u8 = undefined;
     const expected_encoded_len = try base64.encode(&input, &expected_encoded);
     var encoded: [260]u8 = undefined;
-    var decoded: [193]u8 = undefined;
-
     for (1..33) |chunk_size| {
         var encoder: base64.Encoder = .{};
         var encoded_len: usize = 0;
@@ -239,25 +304,10 @@ test "[property] - [streaming]: state survives every chunk boundary" {
         encoded_len += try encoder.final(encoded[encoded_len..]);
         try std.testing.expectEqual(expected_encoded_len, encoded_len);
         try std.testing.expectEqualSlices(u8, expected_encoded[0..expected_encoded_len], encoded[0..encoded_len]);
-
-        var decoder: base64.Decoder = .{};
-        var decoded_len: usize = 0;
-        var encoded_index: usize = 0;
-        while (encoded_index < encoded_len) {
-            const chunk_len = @min(chunk_size, encoded_len - encoded_index);
-            decoded_len += try decoder.update(
-                encoded[encoded_index..][0..chunk_len],
-                decoded[decoded_len..],
-            );
-            encoded_index += chunk_len;
-        }
-        decoded_len += try decoder.final(decoded[decoded_len..]);
-        try std.testing.expectEqual(input.len, decoded_len);
-        try std.testing.expectEqualSlices(u8, &input, decoded[0..decoded_len]);
     }
 }
 
-test "[property] - [streaming]: byte updates match block updates" {
+test "[property] - [encoder]: byte updates match block updates" {
     var input: [97]u8 = undefined;
     for (&input, 0..) |*byte, index| byte.* = @truncate(index * 41 + 3);
 
@@ -270,14 +320,6 @@ test "[property] - [streaming]: byte updates match block updates" {
     encoded_len += try encoder.final(encoded[encoded_len..]);
     try std.testing.expectEqual(expected_len, encoded_len);
     try std.testing.expectEqualSlices(u8, expected[0..expected_len], encoded[0..encoded_len]);
-
-    var decoded: [97]u8 = undefined;
-    var decoder: base64.Decoder = .{};
-    var decoded_len: usize = 0;
-    for (encoded[0..encoded_len]) |byte| decoded_len += try decoder.updateByte(byte, decoded[decoded_len..]);
-    decoded_len += try decoder.final(decoded[decoded_len..]);
-    try std.testing.expectEqual(input.len, decoded_len);
-    try std.testing.expectEqualSlices(u8, &input, decoded[0..decoded_len]);
 }
 
 fn referenceEncode(input: []const u8, output: []u8) usize {
@@ -314,4 +356,39 @@ fn referenceEncode(input: []const u8, output: []u8) usize {
         output_index += 4;
     }
     return output_index;
+}
+
+const Feed = union(enum) {
+    bytes,
+    chunks: usize,
+};
+
+fn streamDecode(input: []const u8, feed: Feed, output: []u8) base64.Error!usize {
+    var decoder: base64.Decoder = .{};
+    var output_len: usize = 0;
+    switch (feed) {
+        .bytes => for (input) |byte| {
+            output_len += try decoder.updateByte(byte, output[output_len..]);
+        },
+        .chunks => |chunk_size| {
+            var index: usize = 0;
+            while (index < input.len) : (index += chunk_size) {
+                const chunk = input[index..@min(input.len, index + chunk_size)];
+                output_len += try decoder.update(chunk, output[output_len..]);
+            }
+        },
+    }
+    return output_len + try decoder.final(output[output_len..]);
+}
+
+fn expectSameDecode(
+    expected: base64.Error!usize,
+    expected_output: []const u8,
+    actual: base64.Error!usize,
+    actual_output: []const u8,
+) !void {
+    const expected_len = expected catch |err| return std.testing.expectError(err, actual);
+    const actual_len = try actual;
+    const actual_bytes = actual_output[0..actual_len];
+    try std.testing.expectEqualSlices(u8, expected_output[0..expected_len], actual_bytes);
 }

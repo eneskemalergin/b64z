@@ -7,11 +7,21 @@ This directory contains two retained Linux x86-64 benchmark pages:
 
 Each target page contains its result table, light and dark SVG figures, raw measurement table, and summary table.
 
+## Status of these results
+
+The retained pages were measured on 2026-09-19 from commit `b211e3b` with uncommitted changes. They do not describe the current B64Z build, and they will be replaced by a new run. Since that run:
+
+- The AVX2 encode and decode kernels changed.
+- Memory modes convert in one buffer instead of separate input and output buffers, and ask Linux for transparent huge pages.
+- The streaming decoder no longer scans each chunk twice, and release builds no longer reserve an unused 256 KiB signal stack.
+
+The Aklomp executable used for these pages was built with its SIMD options disabled and contains no AVX2 instructions, so its rows measure Aklomp's scalar path. A new run must rebuild Aklomp with AVX2 before comparing against it.
+
 ## Compared operations
 
 The four B64Z modes are `encode-memory`, `decode-memory`, `encode-streaming`, and `decode-streaming`.
 
-In a mode name, `memory` means complete-input processing, not the measured memory value. B64Z reads the complete input into an allocated buffer and allocates a complete output buffer. `Streaming` means incremental processing through fixed input and output buffers. A peer appears only in the mode selected for its command and adapter. Aklomp and GNU Coreutils appear in streaming rows. simdutf, Turbo-Base64, Rust base64, Rust base64-simd, and Zig std.base64 appear in memory rows.
+In a mode name, `memory` means complete-input processing, not the measured memory value. B64Z reads the complete input into one buffer and converts it in place; for encoding, that buffer also holds the encoded output. The retained pages predate this and used separate input and output buffers. The peer memory adapters keep separate input and output buffers. `Streaming` means incremental processing through fixed input and output buffers. A peer appears only in the mode selected for its command and adapter. Aklomp and GNU Coreutils appear in streaming rows. simdutf, Turbo-Base64, Rust base64, Rust base64-simd, and Zig std.base64 appear in memory rows.
 
 `Peak RSS` is the per-sample maximum resident set size reported by Zebrac for the timed process. The reports use the mean of those per-sample peaks. It includes the executable, runtime, file I/O buffers, codec state, and resident input or output allocations. It is not the size of one codec buffer.
 
@@ -21,7 +31,7 @@ The five size names refer to the raw case bytes: `tiny` is 256 B, `small` is 16 
 
 ## Method
 
-Each row starts one command for one input. The timed process includes startup, file reads, allocation, Base64 work, and standard-output writes. Zebrac runs 20 measured samples after 5 warmups with a 15,000 ms duration ceiling. The reports use the geometric mean of 25 cases and show the huge-input result separately.
+Each row starts one command for one input. B64Z streaming rows pass `--chunk 8191` for encoding and `--chunk 4093` for decoding, so each 64 KiB read is converted in several `update` calls; memory rows pass `--chunk 65536`, which memory modes ignore. The timed process includes startup, file reads, allocation, Base64 work, and standard-output writes. Zebrac runs 20 measured samples after 5 warmups with a 15,000 ms duration ceiling. The reports use the geometric mean of 25 cases and show the huge-input result separately.
 
 Byte checks run before timing. B64Z and every selected peer are compared with canonical padded Base64 bytes from Aklomp. Invalid-input checks apply only to B64Z because the selected peers accept different grammars.
 

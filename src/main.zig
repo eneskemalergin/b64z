@@ -1,250 +1,217 @@
 //! Command-line adapter for the custom Base64 codec and the local benchmark jobs.
+//!
+//! Each run converts one input file. Memory modes read the whole file into one buffer and
+//! convert it in place; streaming modes reuse fixed stack buffers. Output goes to standard
+//! output as raw bytes or as a result line with an output probe. Diagnostics go to standard
+//! error. On Linux, memory modes ask for transparent huge pages for their whole-input buffer.
 
 const std = @import("std");
-const base64 = @import("base64.zig");
 const builtin = @import("builtin");
 
+const base64 = @import("base64");
+
 const Io = std.Io;
+
+// Only the segfault handler uses the alternate signal stack. Release builds omit the handler,
+// so they also skip the stack's 256 KiB of resident memory.
+pub const std_options: std.Options = .{
+    .signal_stack_size = if (std.debug.default_enable_segfault_handler)
+        (std.Options{}).signal_stack_size
+    else
+        null,
+};
+
+pub fn main(init: std.process.Init.Minimal) !void {
+    var threaded: Io.Threaded = .init_single_threaded;
+    const io = threaded.io();
+    const allocator = std.heap.page_allocator;
+    var args = try std.process.Args.Iterator.initAllocator(init.args, allocator);
+    defer args.deinit();
+    _ = args.next();
+
+    var stdout_buffer: [4096]u8 = undefined;
+    var stdout_writer = Io.File.stdout().writer(io, &stdout_buffer);
+    const stdout = &stdout_writer.interface;
+
+    const first = args.next() orelse return usage();
+    if (std.mem.eql(u8, first, "--version")) {
+        try stdout.print("custom-base64 {s} backend={s} optimize={s} target={s}\n", .{
+            VERSION,
+            @tagName(base64.BACKEND),
+            @tagName(builtin.mode),
+            @tagName(builtin.target.cpu.arch),
+        });
+        return stdout.flush();
+    }
+    const request = parseRequest(first, &args) catch return usage();
+
+    // Repeated runs without written output keep the probe so conversions stay observable.
+    const track_probe = !request.raw or request.iterations > 1;
+    var result: Conversion = undefined;
+    var sink: u64 = 0;
+    for (0..request.iterations) |iteration| {
+        const last = iteration + 1 == request.iterations;
+        const destination: ?*Io.Writer = if (request.raw and last) stdout else null;
+        result = if (request.mode.streaming())
+            try convertStreaming(io, request, track_probe, destination)
+        else
+            try convertMemory(allocator, io, request, track_probe, destination);
+        sink ^= result.probe;
+        std.mem.doNotOptimizeAway(sink);
+    }
+
+    if (request.raw) return stdout.flush();
+    if (request.expected_probe) |expected| {
+        if (result.probe != expected) return error.OutputProbeMismatch;
+        return;
+    }
+    try stdout.print(
+        "candidate=zig-custom-v1 variant={s} mode={s} bytes={d} output_bytes={d} " ++
+            "iterations={d} probe={x:0>16} sink={x:0>16} backend=zig-{s}\n",
+        .{
+            VARIANT,
+            request.mode.label(),
+            result.input_bytes,
+            result.output_bytes,
+            request.iterations,
+            result.probe,
+            sink,
+            @tagName(base64.BACKEND),
+        },
+    );
+    try stdout.flush();
+}
+
 const VERSION = "0.1.0";
 const VARIANT = "Base64/RFC4648";
 const STREAM_INPUT_SIZE = 64 * 1024;
 const STREAM_OUTPUT_SIZE = 88 * 1024;
+const PROBE_OFFSET: u64 = 1469598103934665603;
+const PROBE_PRIME: u64 = 1099511628211;
 
 const Mode = enum {
     encode_memory,
     decode_memory,
     encode_streaming,
     decode_streaming,
+
+    const LABELS = [_][]const u8{
+        "encode-memory",
+        "decode-memory",
+        "encode-streaming",
+        "decode-streaming",
+    };
+
+    fn parse(value: []const u8) ?Mode {
+        for (LABELS, 0..) |label_text, index| {
+            if (std.mem.eql(u8, value, label_text)) return @enumFromInt(index);
+        }
+        return null;
+    }
+
+    fn label(mode: Mode) []const u8 {
+        return LABELS[@intFromEnum(mode)];
+    }
+
+    fn encoding(mode: Mode) bool {
+        return mode == .encode_memory or mode == .encode_streaming;
+    }
+
+    fn streaming(mode: Mode) bool {
+        return mode == .encode_streaming or mode == .decode_streaming;
+    }
 };
 
 const Request = struct {
     mode: Mode = .encode_memory,
-    chunk_size: usize = 64 * 1024,
+    chunk_size: usize = STREAM_INPUT_SIZE,
     iterations: usize = 1,
     input_path: []const u8,
     raw: bool = false,
     expected_probe: ?u64 = null,
 };
 
-pub fn main(init: std.process.Init.Minimal) !void {
-    var threaded: std.Io.Threaded = .init_single_threaded;
-    const io = threaded.io();
-    const allocator = std.heap.page_allocator;
-    var args = try std.process.Args.Iterator.initAllocator(init.args, allocator);
-    defer args.deinit();
-    _ = args.next();
-    const first = args.next() orelse return usage();
-    if (std.mem.eql(u8, first, "--version")) return printVersion(io);
-
-    const request = parseRequest(first, &args) catch return usage();
-    if (isStreaming(request.mode)) return runStreaming(io, request);
-
-    const input = try readInput(io, allocator, request.input_path);
-    defer allocator.free(input);
-
-    const encoding = switch (request.mode) {
-        .encode_memory, .encode_streaming => true,
-        .decode_memory, .decode_streaming => false,
-    };
-    const output_capacity = if (encoding)
-        try base64.encodedSize(input.len)
-    else
-        try base64.decodedSize(input);
-    const output = try allocator.alloc(u8, @max(output_capacity, 1));
-    defer allocator.free(output);
-
-    var output_len: usize = 0;
-    var probe: u64 = 0;
-    var sink: u64 = 0;
-    const track_probe = !request.raw or request.iterations > 1;
-    var iteration: usize = 0;
-    while (iteration < request.iterations) : (iteration += 1) {
-        output_len = try apply(request.mode, input, request.chunk_size, output);
-        if (track_probe) {
-            probe = @call(.never_inline, outputProbe, .{output[0..output_len]});
-            std.mem.doNotOptimizeAway(probe);
-            sink ^= probe;
-            std.mem.doNotOptimizeAway(sink);
-        }
-        std.mem.doNotOptimizeAway(output.ptr);
-    }
-
-    if (request.raw) {
-        try writeBytes(io, output[0..output_len]);
-        return;
-    }
-    if (request.expected_probe) |expected| {
-        if (probe != expected) return error.OutputProbeMismatch;
-    }
-    if (request.expected_probe != null) return;
-    try printResult(io, request.mode, input.len, output_len, request.iterations, probe, sink);
-}
-
-fn isStreaming(mode: Mode) bool {
-    return mode == .encode_streaming or mode == .decode_streaming;
-}
-
-fn runStreaming(io: Io, request: Request) !void {
-    var input_buffer: [STREAM_INPUT_SIZE]u8 = undefined;
-    var output_buffer: [STREAM_OUTPUT_SIZE]u8 = undefined;
-    var stdout_buffer: [4096]u8 = undefined;
-    var stdout = std.Io.File.stdout().writer(io, &stdout_buffer);
-
-    var input_bytes: usize = 0;
-    var output_len: usize = 0;
-    var probe: u64 = 0;
-    var sink: u64 = 0;
-    const track_probe = !request.raw or request.iterations > 1;
-    var iteration: usize = 0;
-    while (iteration < request.iterations) : (iteration += 1) {
-        const writer: ?*Io.Writer = if (request.raw and iteration + 1 == request.iterations)
-            &stdout.interface
-        else
-            null;
-        const result = try streamIteration(
-            io,
-            request,
-            &input_buffer,
-            &output_buffer,
-            writer,
-        );
-        input_bytes = result.input_bytes;
-        output_len = result.output_bytes;
-        probe = result.probe;
-        if (track_probe) {
-            std.mem.doNotOptimizeAway(probe);
-            sink ^= probe;
-            std.mem.doNotOptimizeAway(sink);
-        }
-        std.mem.doNotOptimizeAway(&output_buffer);
-    }
-
-    if (request.raw) {
-        try stdout.interface.flush();
-        return;
-    }
-    if (request.expected_probe) |expected| {
-        if (probe != expected) return error.OutputProbeMismatch;
-    }
-    if (request.expected_probe != null) return;
-    try printResult(io, request.mode, input_bytes, output_len, request.iterations, probe, sink);
-}
-
-const StreamingProbe = struct {
-    value: u64,
-    output_offset: usize = 0,
-    next_sample: usize = 0,
-    last_byte: u8 = 0,
-    has_last_byte: bool = false,
-
-    fn init(output_len: usize) StreamingProbe {
-        var probe = StreamingProbe{ .value = 1469598103934665603 };
-        const prime: u64 = 1099511628211;
-        const length: u64 = @intCast(output_len);
-        var shift: usize = 0;
-        while (shift < 8) : (shift += 1) {
-            const length_byte: u8 = @truncate(length >> @intCast(shift * 8));
-            probe.value ^= length_byte;
-            probe.value *%= prime;
-        }
-        return probe;
-    }
-
-    fn feed(self: *StreamingProbe, data: []const u8, track_probe: bool) void {
-        const prime: u64 = 1099511628211;
-        if (track_probe) {
-            while (self.next_sample < self.output_offset + data.len) {
-                if (self.next_sample < self.output_offset) self.next_sample = self.output_offset;
-                self.value ^= data[self.next_sample - self.output_offset];
-                self.value *%= prime;
-                self.next_sample += 64;
-            }
-            if (data.len != 0) {
-                self.last_byte = data[data.len - 1];
-                self.has_last_byte = true;
-            }
-        }
-        self.output_offset += data.len;
-    }
-
-    fn finish(self: *StreamingProbe) u64 {
-        if (self.has_last_byte) {
-            const prime: u64 = 1099511628211;
-            self.value ^= self.last_byte;
-            self.value *%= prime;
-        }
-        return self.value;
-    }
-};
-
-const StreamingResult = struct {
+const Conversion = struct {
     input_bytes: usize,
     output_bytes: usize,
     probe: u64,
 };
 
-fn streamIteration(
+fn convertMemory(
+    allocator: std.mem.Allocator,
     io: Io,
     request: Request,
-    input_buffer: []u8,
-    output_buffer: []u8,
-    writer: ?*Io.Writer,
-) !StreamingResult {
+    track_probe: bool,
+    destination: ?*Io.Writer,
+) !Conversion {
     var file = try openInputFile(io, request.input_path);
     defer file.close(io);
-    const stat = try file.stat(io);
-    const input_bytes: usize = std.math.cast(usize, stat.size) orelse return error.InputTooLarge;
-    const output_bytes = try streamingOutputSize(io, file, request.mode, input_bytes);
-    const track_probe = !request.raw or request.iterations > 1;
-    var probe = StreamingProbe.init(output_bytes);
+    const encoding = request.mode.encoding();
+    const whole = try readWhole(allocator, io, file, encoding);
+    defer allocator.free(whole.buffer);
+
+    const output_len = if (encoding)
+        try base64.encodeInPlace(whole.buffer, whole.input_len)
+    else
+        try base64.decodeInPlace(whole.buffer[0..whole.input_len]);
+    var probe: Probe = .init(output_len);
+    try emit(&probe, whole.buffer[0..output_len], track_probe, destination);
+    return .{
+        .input_bytes = whole.input_len,
+        .output_bytes = output_len,
+        .probe = if (track_probe) probe.finish() else 0,
+    };
+}
+
+fn convertStreaming(
+    io: Io,
+    request: Request,
+    track_probe: bool,
+    destination: ?*Io.Writer,
+) !Conversion {
+    var input_buffer: [STREAM_INPUT_SIZE]u8 = undefined;
+    var output_buffer: [STREAM_OUTPUT_SIZE]u8 = undefined;
+    var file = try openInputFile(io, request.input_path);
+    defer file.close(io);
+
+    const encoding = request.mode.encoding();
+    const input_bytes = std.math.cast(usize, (try file.stat(io)).size) orelse
+        return error.InputTooLarge;
+    const output_bytes = if (encoding)
+        try base64.encodedSize(input_bytes)
+    else
+        try streamingDecodedSize(io, file, input_bytes);
+    var probe: Probe = .init(output_bytes);
     var reader = file.reader(io, &.{});
     var encoder: base64.Encoder = .{};
     var decoder: base64.Decoder = .{};
     var bytes_read: usize = 0;
-    var pending_output: usize = 0;
 
     while (true) {
-        const read_len = try reader.interface.readSliceShort(input_buffer);
+        const read_len = try reader.interface.readSliceShort(&input_buffer);
         if (read_len == 0) break;
-        var chunk_index: usize = 0;
-        if (request.chunk_size <= 3) {
-            while (chunk_index < read_len) {
-                const written = switch (request.mode) {
-                    .encode_streaming => try encoder.updateByte(input_buffer[chunk_index], output_buffer[pending_output..]),
-                    .decode_streaming => try decoder.updateByte(input_buffer[chunk_index], output_buffer[pending_output..]),
-                    else => unreachable,
-                };
-                pending_output += written;
-                chunk_index += 1;
-                bytes_read += 1;
-            }
-        } else {
-            while (chunk_index < read_len) {
-                const chunk_len = @min(request.chunk_size, read_len - chunk_index);
-                const input_chunk = input_buffer[chunk_index..][0..chunk_len];
-                const written = switch (request.mode) {
-                    .encode_streaming => try encoder.update(input_chunk, output_buffer[pending_output..]),
-                    .decode_streaming => try decoder.update(input_chunk, output_buffer[pending_output..]),
-                    else => unreachable,
-                };
-                pending_output += written;
-                chunk_index += chunk_len;
-                bytes_read += chunk_len;
-            }
+        bytes_read += read_len;
+
+        var output_len: usize = 0;
+        var chunk_start: usize = 0;
+        while (chunk_start < read_len) {
+            const chunk_len = @min(request.chunk_size, read_len - chunk_start);
+            const chunk = input_buffer[chunk_start..][0..chunk_len];
+            const output = output_buffer[output_len..];
+            output_len += if (encoding)
+                try encoder.update(chunk, output)
+            else
+                try decoder.update(chunk, output);
+            chunk_start += chunk_len;
         }
-        if (pending_output != 0) {
-            try emitStreaming(output_buffer[0..pending_output], &probe, track_probe, writer);
-            pending_output = 0;
-        }
+        try emit(&probe, output_buffer[0..output_len], track_probe, destination);
     }
 
-    const written = switch (request.mode) {
-        .encode_streaming => try encoder.final(output_buffer[pending_output..]),
-        .decode_streaming => try decoder.final(output_buffer[pending_output..]),
-        else => unreachable,
-    };
-    pending_output += written;
-    try emitStreaming(output_buffer[0..pending_output], &probe, track_probe, writer);
+    const final_len = if (encoding)
+        try encoder.final(&output_buffer)
+    else
+        try decoder.final(&output_buffer);
+    try emit(&probe, output_buffer[0..final_len], track_probe, destination);
     if (bytes_read != input_bytes) return error.InputChanged;
     if (probe.output_offset != output_bytes) return error.OutputLengthMismatch;
     return .{
@@ -254,42 +221,100 @@ fn streamIteration(
     };
 }
 
-fn emitStreaming(data: []const u8, probe: *StreamingProbe, track_probe: bool, writer: ?*Io.Writer) !void {
+fn emit(probe: *Probe, data: []const u8, track_probe: bool, destination: ?*Io.Writer) !void {
     probe.feed(data, track_probe);
-    if (writer) |destination| try destination.writeAll(data);
+    if (destination) |writer| try writer.writeAll(data);
+}
+
+/// FNV-1a over the output length, every 64th output byte, and the last output byte. Sample
+/// positions depend only on output offsets, so memory and streaming runs report equal probes.
+const Probe = struct {
+    value: u64 = PROBE_OFFSET,
+    output_offset: usize = 0,
+    next_sample: usize = 0,
+    last_byte: ?u8 = null,
+
+    fn init(output_len: usize) Probe {
+        var probe: Probe = .{};
+        const length: u64 = output_len;
+        for (0..8) |shift| probe.mix(@truncate(length >> @intCast(shift * 8)));
+        return probe;
+    }
+
+    fn mix(self: *Probe, byte: u8) void {
+        self.value ^= byte;
+        self.value *%= PROBE_PRIME;
+    }
+
+    fn feed(self: *Probe, data: []const u8, track_probe: bool) void {
+        if (track_probe) {
+            while (self.next_sample < self.output_offset + data.len) : (self.next_sample += 64) {
+                self.mix(data[self.next_sample - self.output_offset]);
+            }
+            if (data.len != 0) self.last_byte = data[data.len - 1];
+        }
+        self.output_offset += data.len;
+    }
+
+    fn finish(self: *Probe) u64 {
+        if (self.last_byte) |byte| self.mix(byte);
+        return self.value;
+    }
+};
+
+const WholeInput = struct {
+    buffer: []u8,
+    input_len: usize,
+};
+
+/// Reads the whole file into one buffer sized for in-place conversion. The caller frees
+/// `buffer` with `allocator`. Files without a known size, such as pipes and `/proc` entries,
+/// are read to EOF and then resized.
+fn readWhole(allocator: std.mem.Allocator, io: Io, file: Io.File, encoding: bool) !WholeInput {
+    const stat = try file.stat(io);
+    if (stat.kind == .file and stat.size != 0) {
+        const input_len = std.math.cast(usize, stat.size) orelse return error.InputTooLarge;
+        const buffer = try allocator.alloc(u8, try wholeCapacity(input_len, encoding));
+        errdefer allocator.free(buffer);
+        adviseHugePages(buffer);
+        const read_len = try file.readPositionalAll(io, buffer[0..input_len], 0);
+        if (read_len != input_len) return error.InputChanged;
+        return .{ .buffer = buffer, .input_len = input_len };
+    }
+
+    var reader = file.readerStreaming(io, &.{});
+    const input = try reader.interface.allocRemaining(allocator, .unlimited);
+    errdefer allocator.free(input);
+    const buffer = try allocator.realloc(input, try wholeCapacity(input.len, encoding));
+    return .{ .buffer = buffer, .input_len = input.len };
+}
+
+fn wholeCapacity(input_len: usize, encoding: bool) !usize {
+    return if (encoding) base64.encodedSize(input_len) else input_len;
+}
+
+/// Returns the decoded length from the file size and the final group, so the probe can hash it
+/// before streaming. Malformed input gets an estimate; decoding then fails in input order.
+fn streamingDecodedSize(io: Io, file: Io.File, input_bytes: usize) !usize {
+    if (input_bytes < 4 or input_bytes % 4 != 0) return input_bytes / 4 * 3;
+    var tail: [4]u8 = undefined;
+    if (try file.readPositionalAll(io, &tail, input_bytes - 4) != tail.len) {
+        return error.InputChanged;
+    }
+    return input_bytes / 4 * 3 - 3 + (base64.decodedSize(&tail) catch 3);
 }
 
 fn openInputFile(io: Io, path: []const u8) !Io.File {
-    if (std.fs.path.isAbsolute(path)) return std.Io.Dir.openFileAbsolute(io, path, .{});
-    return std.Io.Dir.cwd().openFile(io, path, .{});
-}
-
-fn streamingOutputSize(io: Io, file: Io.File, mode: Mode, input_bytes: usize) !usize {
-    return switch (mode) {
-        .encode_streaming => base64.encodedSize(input_bytes),
-        .decode_streaming => streamingDecodedSize(io, file, input_bytes),
-        else => unreachable,
-    };
-}
-
-fn streamingDecodedSize(io: Io, file: Io.File, input_bytes: usize) !usize {
-    if (input_bytes % 4 != 0) return error.InvalidPadding;
-    if (input_bytes == 0) return 0;
-
-    var tail: [4]u8 = undefined;
-    const read = try file.readPositionalAll(io, &tail, @intCast(input_bytes - 4));
-    if (read != tail.len) return error.InputChanged;
-    const tail_size = try base64.decodedSize(&tail);
-    const groups = input_bytes / 4;
-    if (groups - 1 > (std.math.maxInt(usize) - tail_size) / 3) return error.InputTooLarge;
-    return (groups - 1) * 3 + tail_size;
+    if (std.fs.path.isAbsolute(path)) return Io.Dir.openFileAbsolute(io, path, .{});
+    return Io.Dir.cwd().openFile(io, path, .{});
 }
 
 fn usage() error{InvalidArguments} {
     std.debug.print(
         \\usage: custom-base64 --version
-        \\       custom-base64 --mode encode-memory|decode-memory|encode-streaming|decode-streaming
-        \\           --chunk N --iterations N [--raw|--expected-probe HEX] INPUT
+        \\       custom-base64 [--mode MODE] [--chunk N] [--iterations N]
+        \\           [--raw | --expected-probe HEX] INPUT
+        \\MODE: encode-memory (default), decode-memory, encode-streaming, decode-streaming
         \\
     , .{});
     return error.InvalidArguments;
@@ -301,11 +326,13 @@ fn parseRequest(first: []const u8, args: *std.process.Args.Iterator) !Request {
     while (current) |arg| {
         if (std.mem.eql(u8, arg, "--mode")) {
             const value = args.next() orelse return error.InvalidArguments;
-            request.mode = parseMode(value) orelse return error.InvalidArguments;
+            request.mode = Mode.parse(value) orelse return error.InvalidArguments;
         } else if (std.mem.eql(u8, arg, "--chunk")) {
-            request.chunk_size = try parsePositive(args.next() orelse return error.InvalidArguments);
+            const value = args.next() orelse return error.InvalidArguments;
+            request.chunk_size = try parsePositive(value);
         } else if (std.mem.eql(u8, arg, "--iterations")) {
-            request.iterations = try parsePositive(args.next() orelse return error.InvalidArguments);
+            const value = args.next() orelse return error.InvalidArguments;
+            request.iterations = try parsePositive(value);
         } else if (std.mem.eql(u8, arg, "--raw")) {
             request.raw = true;
         } else if (std.mem.eql(u8, arg, "--expected-probe")) {
@@ -327,118 +354,24 @@ fn parseRequest(first: []const u8, args: *std.process.Args.Iterator) !Request {
     return request;
 }
 
-fn parseMode(value: []const u8) ?Mode {
-    if (std.mem.eql(u8, value, "encode-memory")) return .encode_memory;
-    if (std.mem.eql(u8, value, "decode-memory")) return .decode_memory;
-    if (std.mem.eql(u8, value, "encode-streaming")) return .encode_streaming;
-    if (std.mem.eql(u8, value, "decode-streaming")) return .decode_streaming;
-    return null;
-}
-
 fn parsePositive(value: []const u8) !usize {
     const parsed = std.fmt.parseInt(usize, value, 10) catch return error.InvalidArguments;
     if (parsed == 0) return error.InvalidArguments;
     return parsed;
 }
 
-fn readInput(io: Io, allocator: std.mem.Allocator, path: []const u8) ![]u8 {
-    if (!std.fs.path.isAbsolute(path)) return std.Io.Dir.cwd().readFileAlloc(io, path, allocator, .unlimited);
-    var file = try std.Io.Dir.openFileAbsolute(io, path, .{});
-    defer file.close(io);
-    var reader = file.reader(io, &.{});
-    return reader.interface.allocRemaining(allocator, .unlimited);
-}
+// --- Linux huge-page advice ---
 
-fn apply(mode: Mode, input: []const u8, chunk_size: usize, output: []u8) !usize {
-    return switch (mode) {
-        .encode_memory => base64.encode(input, output),
-        .decode_memory => base64.decode(input, output),
-        .encode_streaming => encodeStreaming(input, chunk_size, output),
-        .decode_streaming => decodeStreaming(input, chunk_size, output),
-    };
-}
+const HUGE_PAGE_SIZE = 2 * 1024 * 1024;
 
-fn encodeStreaming(input: []const u8, chunk_size: usize, output: []u8) !usize {
-    var encoder: base64.Encoder = .{};
-    var input_index: usize = 0;
-    var output_index: usize = 0;
-
-    while (input_index < input.len) {
-        const chunk_len = @min(input.len - input_index, chunk_size);
-        output_index += try encoder.update(input[input_index..][0..chunk_len], output[output_index..]);
-        input_index += chunk_len;
-    }
-
-    output_index += try encoder.final(output[output_index..]);
-    return output_index;
-}
-
-fn decodeStreaming(input: []const u8, chunk_size: usize, output: []u8) !usize {
-    var decoder: base64.Decoder = .{};
-    var input_index: usize = 0;
-    var output_index: usize = 0;
-
-    while (input_index < input.len) {
-        const chunk_len = @min(input.len - input_index, chunk_size);
-        output_index += try decoder.update(input[input_index..][0..chunk_len], output[output_index..]);
-        input_index += chunk_len;
-    }
-
-    output_index += try decoder.final(output[output_index..]);
-    return output_index;
-}
-
-fn outputProbe(data: []const u8) u64 {
-    var value: u64 = 1469598103934665603;
-    const prime: u64 = 1099511628211;
-    const length: u64 = @intCast(data.len);
-    var shift: usize = 0;
-    while (shift < 8) : (shift += 1) {
-        const length_byte: u8 = @truncate(length >> @intCast(shift * 8));
-        value ^= length_byte;
-        value *%= prime;
-    }
-    var index: usize = 0;
-    while (index < data.len) : (index += 64) {
-        value ^= data[index];
-        value *%= prime;
-    }
-    if (data.len != 0) {
-        value ^= data[data.len - 1];
-        value *%= prime;
-    }
-    return value;
-}
-
-fn writeBytes(io: Io, data: []const u8) !void {
-    var buffer: [4096]u8 = undefined;
-    var stdout = std.Io.File.stdout().writer(io, &buffer);
-    try stdout.interface.writeAll(data);
-    try stdout.interface.flush();
-}
-
-fn printVersion(io: Io) !void {
-    var buffer: [64]u8 = undefined;
-    var stdout = std.Io.File.stdout().writer(io, &buffer);
-    try stdout.interface.print(
-        "custom-base64 {s} backend={s} optimize={s} target={s}\n",
-        .{ VERSION, @tagName(base64.BACKEND), @tagName(builtin.mode), @tagName(builtin.target.cpu.arch) },
-    );
-    try stdout.interface.flush();
-}
-
-fn printResult(io: Io, mode: Mode, bytes: usize, output_bytes: usize, iterations: usize, probe: u64, sink: u64) !void {
-    var buffer: [256]u8 = undefined;
-    var stdout = std.Io.File.stdout().writer(io, &buffer);
-    const mode_text = switch (mode) {
-        .encode_memory => "encode-memory",
-        .decode_memory => "decode-memory",
-        .encode_streaming => "encode-streaming",
-        .decode_streaming => "decode-streaming",
-    };
-    try stdout.interface.print(
-        "candidate=zig-custom-v1 variant={s} mode={s} bytes={d} output_bytes={d} iterations={d} probe={x:0>16} sink={x:0>16} backend=zig-{s}\n",
-        .{ VARIANT, mode_text, bytes, output_bytes, iterations, probe, sink, @tagName(base64.BACKEND) },
-    );
-    try stdout.interface.flush();
+/// Asks Linux to back the 2 MiB-aligned interior of a whole-input buffer with transparent huge
+/// pages, so a small buffer never rounds up to a huge page. Call it before the first write.
+/// Other targets, and kernels that refuse the advice, keep ordinary pages with the same bytes.
+fn adviseHugePages(buffer: []u8) void {
+    if (builtin.os.tag != .linux) return;
+    const address = @intFromPtr(buffer.ptr);
+    const start = std.mem.alignForward(usize, address, HUGE_PAGE_SIZE);
+    const end = std.mem.alignBackward(usize, address + buffer.len, HUGE_PAGE_SIZE);
+    if (end <= start) return;
+    std.posix.madvise(@ptrFromInt(start), end - start, std.posix.MADV.HUGEPAGE) catch {};
 }

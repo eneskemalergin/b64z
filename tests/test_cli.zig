@@ -28,13 +28,12 @@ test "[cli] - [custom-base64]: converts RFC 4648 vectors in every mode" {
         const raw_path = try writeInput(arena.allocator(), &tmp, "raw", index, vector.raw);
         const encoded_path = try writeInput(arena.allocator(), &tmp, "b64", index, vector.encoded);
         const runs = [_]struct { args: []const []const u8, expected: []const u8 }{
-            .{ .args = &.{ "--mode", "encode-memory", "--raw", raw_path }, .expected = vector.encoded },
-            .{ .args = &.{ "--mode", "decode-memory", "--raw", encoded_path }, .expected = vector.raw },
-            .{ .args = &.{ "--mode", "encode-streaming", "--raw", raw_path }, .expected = vector.encoded },
-            .{ .args = &.{ "--mode", "decode-streaming", "--raw", encoded_path }, .expected = vector.raw },
-            .{ .args = &.{ "--mode", "encode-streaming", "--chunk", "1", "--raw", raw_path }, .expected = vector.encoded },
-            .{ .args = &.{ "--mode", "decode-streaming", "--chunk", "1", "--raw", encoded_path }, .expected = vector.raw },
-            .{ .args = &.{ "--mode", "decode-memory", "--iterations", "3", "--raw", encoded_path }, .expected = vector.raw },
+            .{ .args = &.{ "--mode", "encode-memory", raw_path }, .expected = vector.encoded },
+            .{ .args = &.{ "--mode", "decode-memory", encoded_path }, .expected = vector.raw },
+            .{ .args = &.{ "--mode", "encode-streaming", raw_path }, .expected = vector.encoded },
+            .{ .args = &.{ "--mode", "decode-streaming", encoded_path }, .expected = vector.raw },
+            .{ .args = &.{ "--mode", "encode-streaming", "--chunk", "1", raw_path }, .expected = vector.encoded },
+            .{ .args = &.{ "--mode", "decode-streaming", "--chunk", "1", encoded_path }, .expected = vector.raw },
         };
         for (runs) |run| {
             const result = try runCli(arena.allocator(), run.args);
@@ -61,7 +60,7 @@ test "[cli] - [custom-base64]: reports decode errors by exact name in both modes
     for (cases, 0..) |case, index| {
         const path = try writeInput(arena.allocator(), &tmp, "bad", index, case.input);
         for ([_][]const u8{ "decode-memory", "decode-streaming" }) |mode| {
-            const result = try runCli(arena.allocator(), &.{ "--mode", mode, "--raw", path });
+            const result = try runCli(arena.allocator(), &.{ "--mode", mode, path });
             try expectExit(1, result.term);
             try std.testing.expectEqualStrings("", result.stdout);
             try std.testing.expectEqualStrings(case.error_line, firstLine(result.stderr));
@@ -81,9 +80,11 @@ test "[cli] - [custom-base64]: rejects invalid arguments with usage" {
         &.{ "--mode", "encode-one-shot", path },
         &.{ "--mode", "decode-one-shot", path },
         &.{ "--mode", "encode-memory" },
-        &.{ "--raw", "--expected-probe", "1", path },
         &.{ "--chunk", "0", path },
-        &.{ "--iterations", "x", path },
+        &.{ "--mode", "encode-memory", "--chunk", "1", path },
+        &.{ "--iterations", "1", path },
+        &.{ "--expected-probe", "1", path },
+        &.{ "--raw", path },
         &.{ "--unknown", path },
         &.{ path, path },
     };
@@ -96,7 +97,7 @@ test "[cli] - [custom-base64]: rejects invalid arguments with usage" {
     }
 }
 
-test "[cli] - [custom-base64]: memory and streaming modes report the same probe" {
+test "[cli] - [custom-base64]: memory and streaming modes write exact bytes" {
     var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer arena.deinit();
     var tmp = std.testing.tmpDir(.{});
@@ -109,31 +110,22 @@ test "[cli] - [custom-base64]: memory and streaming modes report the same probe"
     const raw_path = try writeInput(arena.allocator(), &tmp, "raw", 0, &raw);
     const encoded_path = try writeInput(arena.allocator(), &tmp, "b64", 0, &encoded);
 
-    const pairs = [_]struct { memory: []const u8, streaming: []const u8, path: []const u8 }{
-        .{ .memory = "encode-memory", .streaming = "encode-streaming", .path = raw_path },
-        .{ .memory = "decode-memory", .streaming = "decode-streaming", .path = encoded_path },
+    const pairs = [_]struct {
+        memory: []const u8,
+        streaming: []const u8,
+        path: []const u8,
+        expected: []const u8,
+    }{
+        .{ .memory = "encode-memory", .streaming = "encode-streaming", .path = raw_path, .expected = &encoded },
+        .{ .memory = "decode-memory", .streaming = "decode-streaming", .path = encoded_path, .expected = &raw },
     };
     for (pairs) |pair| {
         const memory = try runCli(arena.allocator(), &.{ "--mode", pair.memory, pair.path });
         const streaming = try runCli(arena.allocator(), &.{ "--mode", pair.streaming, pair.path });
         try expectExit(0, memory.term);
         try expectExit(0, streaming.term);
-        const probe = field(memory.stdout, "probe=");
-        try std.testing.expectEqualStrings(probe, field(streaming.stdout, "probe="));
-
-        const accepted = try runCli(
-            arena.allocator(),
-            &.{ "--mode", pair.streaming, "--expected-probe", probe, pair.path },
-        );
-        try expectExit(0, accepted.term);
-        try std.testing.expectEqualStrings("", accepted.stdout);
-
-        const rejected = try runCli(
-            arena.allocator(),
-            &.{ "--mode", pair.memory, "--expected-probe", "0", pair.path },
-        );
-        try expectExit(1, rejected.term);
-        try std.testing.expectEqualStrings("error: OutputProbeMismatch", firstLine(rejected.stderr));
+        try std.testing.expectEqualSlices(u8, pair.expected, memory.stdout);
+        try std.testing.expectEqualSlices(u8, pair.expected, streaming.stdout);
     }
 }
 
@@ -145,7 +137,7 @@ test "[cli] - [custom-base64]: converts empty input in every mode" {
 
     const path = try writeInput(arena.allocator(), &tmp, "empty", 0, "");
     for ([_][]const u8{ "encode-memory", "decode-memory", "encode-streaming", "decode-streaming" }) |mode| {
-        const result = try runCli(arena.allocator(), &.{ "--mode", mode, "--raw", path });
+        const result = try runCli(arena.allocator(), &.{ "--mode", mode, path });
         try expectExit(0, result.term);
         try std.testing.expectEqualStrings("", result.stdout);
         try std.testing.expectEqualStrings("", result.stderr);
@@ -167,7 +159,7 @@ test "[cli] - [custom-base64]: memory mode reads files that report size zero" {
     const expected = try arena.allocator().alloc(u8, std.base64.standard.Encoder.calcSize(raw.len));
     _ = std.base64.standard.Encoder.encode(expected, raw);
 
-    const result = try runCli(arena.allocator(), &.{ "--mode", "encode-memory", "--raw", proc_path });
+    const result = try runCli(arena.allocator(), &.{ "--mode", "encode-memory", proc_path });
     try expectExit(0, result.term);
     try std.testing.expectEqualStrings(expected, result.stdout);
 }
@@ -199,10 +191,4 @@ fn expectExit(expected: u8, term: std.process.Child.Term) !void {
 
 fn firstLine(text: []const u8) []const u8 {
     return text[0 .. std.mem.indexOfScalar(u8, text, '\n') orelse text.len];
-}
-
-fn field(line: []const u8, key: []const u8) []const u8 {
-    const start = (std.mem.indexOf(u8, line, key) orelse return "") + key.len;
-    const end = std.mem.indexOfScalarPos(u8, line, start, ' ') orelse line.len;
-    return line[start..end];
 }

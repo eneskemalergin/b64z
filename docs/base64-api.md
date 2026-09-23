@@ -90,15 +90,10 @@ decode-streaming
 
 Memory modes read the complete input into one buffer and convert it in place with `encodeInPlace` or `decodeInPlace`; an encode buffer also holds the encoded output. On Linux, memory modes ask for transparent huge pages for regular-file buffers; other systems, and kernels that refuse the request, use ordinary pages with the same output. Streaming modes read bounded chunks and retain only the stateful carry between chunks.
 
-The command also accepts:
+The command writes converted bytes to standard output and diagnostics to standard error. It accepts:
 
-- `--chunk N`, a positive chunk size for streaming mode.
-- `--iterations N`, a positive repeat count. Each iteration reads the input file again.
-- `--raw`, which writes only encoded or decoded bytes to standard output.
-- `--expected-probe HEX`, which checks the internal output probe and writes no result line.
+- `--chunk N`, a positive chunk size for streaming mode. The command rejects this option in memory modes.
 - `--version`, which prints the B64Z version, selected backend, optimization mode, and target architecture.
-
-Without `--raw` or `--expected-probe`, the command writes a result line describing the mode, byte counts, iteration count, output probe, and backend. Diagnostics go to standard error.
 
 The command rejects the old `encode-one-shot` and `decode-one-shot` mode names.
 

@@ -1,4 +1,4 @@
-use std::{env, ffi::OsStr, fs, io, io::Write, mem::MaybeUninit, process};
+use std::{env, ffi::OsStr, fs, io, io::Write, process};
 
 use base64::{
     encoded_len,
@@ -37,24 +37,21 @@ fn main() {
     } else {
         encoded_len(input.len(), true).unwrap_or_else(|| fail("input is too large"))
     };
-    let mut output = vec![MaybeUninit::<u8>::uninit(); output_capacity];
-    // The codec writes every byte through the returned length before stdout reads the slice.
-    let output_bytes =
-        unsafe { std::slice::from_raw_parts_mut(output.as_mut_ptr().cast::<u8>(), output.len()) };
+    let mut output = vec![0u8; output_capacity];
 
     let output_length = if decode {
-        match engine.decode_slice(&input, output_bytes) {
+        match engine.decode_slice(&input, &mut output) {
             Ok(length) => length,
             Err(error) => fail(&format!("invalid Base64 input: {error}")),
         }
     } else {
-        match engine.encode_slice(&input, output_bytes) {
+        match engine.encode_slice(&input, &mut output) {
             Ok(length) => length,
             Err(error) => fail(&format!("cannot encode input: {error}")),
         }
     };
 
     io::stdout()
-        .write_all(&output_bytes[..output_length])
+        .write_all(&output[..output_length])
         .unwrap_or_else(|error| fail(&format!("cannot write stdout: {error}")));
 }

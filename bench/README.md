@@ -15,7 +15,7 @@ The retained pages were measured on 2026-09-19 from commit `b211e3b` with uncomm
 - Memory modes convert in one buffer instead of separate input and output buffers, and ask Linux for transparent huge pages.
 - The streaming decoder no longer scans each chunk twice, and release builds no longer reserve an unused 256 KiB signal stack.
 
-The Aklomp executable used for these pages was built with its SIMD options disabled and contains no AVX2 instructions, so its rows measure Aklomp's scalar path. A new run must rebuild Aklomp with AVX2 before comparing against it.
+The Aklomp executable used for these pages was built with its SIMD options disabled and contains no AVX2 instructions, so its rows measure Aklomp's scalar path. The current local executable was rebuilt with `AVX2_CFLAGS=-mavx2`; upstream runtime dispatch selects AVX2 on this host.
 
 ## Compared operations
 
@@ -31,13 +31,15 @@ The five size names refer to the raw case bytes: `tiny` is 256 B, `small` is 16 
 
 ## Method
 
-Each row starts one command for one input. B64Z streaming rows pass `--chunk 8191` for encoding and `--chunk 4093` for decoding, so each 64 KiB read is converted in several `update` calls; memory rows pass `--chunk 65536`, which memory modes ignore. The timed process includes startup, file reads, allocation, Base64 work, and standard-output writes. Zebrac runs 20 measured samples after 5 warmups with a 15,000 ms duration ceiling. The reports use the geometric mean of 25 cases and show the huge-input result separately.
+Each row starts one command for one input. B64Z streaming rows pass `--chunk 8191` for encoding and `--chunk 4093` for decoding, so each 64 KiB read is converted in several `update` calls. Memory rows read the complete input into one buffer and convert it in place; they do not pass `--chunk`. Peer memory adapters use separate input and output buffers. The timed process includes startup, file reads, allocation, Base64 work, and standard-output writes. Zebrac runs 20 measured samples after 5 warmups with a 15,000 ms duration ceiling. The reports use the geometric mean of 25 cases and show the huge-input result separately.
 
 Byte checks run before timing. B64Z and every selected peer are compared with canonical padded Base64 bytes from Aklomp. Invalid-input checks apply only to B64Z because the selected peers accept different grammars.
 
 These pages describe named command lines and builds on one Linux x86-64 host. They do not claim library-only instruction speed, a ranking on another host, or a result for an unlisted adapter.
 
 The target choice changes the B64Z build only. Peer binaries keep their own native build and runtime dispatch settings. The scalar page therefore compares B64Z scalar code with those peer builds; it is not a scalar-for-every-peer instruction-set test.
+
+A measurement or report-writing run refuses a worktree with project changes. Generated benchmark pages do not count as project changes, so the AVX2 and scalar pages can be measured in separate runs from the same commit.
 
 ## Run
 
@@ -48,11 +50,11 @@ bash bench/linux-x86-avx2/run.sh
 bash bench/linux-x86-scalar/run.sh
 ```
 
-The scripts require the Linux x86-64 toolchain and local qualification setup described in [`tools/tool.md`](../tools/tool.md). A publication run uses the default sample policy and byte checks.
+The scripts require the Linux x86-64 toolchain and local qualification setup described in [`tools/tool.md`](../tools/tool.md). A publication run uses the default sample policy and byte checks. `--skip-benchmarks --skip-report` builds the selected B64Z target and runs byte checks without Zebrac or gnuplot.
 
 ## Tracked files
 
-- `README.md` explains the target result and method.
+- `README.md` records the target result and run conditions. This file owns the shared method.
 - `measurements.tsv` contains one row for each measured command and case.
 - `summary.tsv` contains the values used by the result table and figures.
 - `figures/scaling-light.svg` and `figures/scaling-dark.svg` show throughput by nominal size.

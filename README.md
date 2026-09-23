@@ -19,7 +19,7 @@ zig build test -Dcpu=native -Doptimize=ReleaseFast --summary all
 
 ## Benchmark summary
 
-The front-page figure uses the Linux x86-64 AVX2 target. The yellow line marks B64Z at `1.0x`; each colored bar ends at a tool's geometric mean over 25 cases, and each whisker covers the middle 50% of those cases. Ratios compare wall time and peak RSS with B64Z in the same mode. Lower is better. `Memory` means complete-input processing, while `streaming` uses fixed input and output buffers.
+The figure summarizes the Linux x86-64 AVX2 report. See the [benchmark README](bench/README.md) for the inputs, commands, and measurement method.
 
 <p align="center">
   <picture>

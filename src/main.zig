@@ -1,9 +1,9 @@
-//! Command-line adapter for the custom Base64 codec and the local benchmark jobs.
+//! Command-line adapter for the custom Base64 codec.
 //!
 //! Each run converts one input file. Memory modes read the whole file into one buffer and
-//! convert it in place; streaming modes reuse fixed stack buffers. Output goes to standard
-//! output as raw bytes or as a result line with an output probe. Diagnostics go to standard
-//! error. On Linux, memory modes ask for transparent huge pages for their whole-input buffer.
+//! convert it in place; streaming modes reuse fixed stack buffers. Converted bytes go to
+//! standard output and diagnostics go to standard error. On Linux, memory modes ask for
+//! transparent huge pages for their whole-input buffer.
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -45,49 +45,16 @@ pub fn main(init: std.process.Init.Minimal) !void {
     }
     const request = parseRequest(first, &args) catch return usage();
 
-    // Repeated runs without written output keep the probe so conversions stay observable.
-    const track_probe = !request.raw or request.iterations > 1;
-    var result: Conversion = undefined;
-    var sink: u64 = 0;
-    for (0..request.iterations) |iteration| {
-        const last = iteration + 1 == request.iterations;
-        const destination: ?*Io.Writer = if (request.raw and last) stdout else null;
-        result = if (request.mode.streaming())
-            try convertStreaming(io, request, track_probe, destination)
-        else
-            try convertMemory(allocator, io, request, track_probe, destination);
-        sink ^= result.probe;
-        std.mem.doNotOptimizeAway(sink);
-    }
-
-    if (request.raw) return stdout.flush();
-    if (request.expected_probe) |expected| {
-        if (result.probe != expected) return error.OutputProbeMismatch;
-        return;
-    }
-    try stdout.print(
-        "candidate=zig-custom-v1 variant={s} mode={s} bytes={d} output_bytes={d} " ++
-            "iterations={d} probe={x:0>16} sink={x:0>16} backend=zig-{s}\n",
-        .{
-            VARIANT,
-            request.mode.label(),
-            result.input_bytes,
-            result.output_bytes,
-            request.iterations,
-            result.probe,
-            sink,
-            @tagName(base64.BACKEND),
-        },
-    );
-    try stdout.flush();
+    if (request.mode.streaming())
+        try convertStreaming(io, request, stdout)
+    else
+        try convertMemory(allocator, io, request, stdout);
+    return stdout.flush();
 }
 
 const VERSION = "0.1.0";
-const VARIANT = "Base64/RFC4648";
 const STREAM_INPUT_SIZE = 64 * 1024;
 const STREAM_OUTPUT_SIZE = 88 * 1024;
-const PROBE_OFFSET: u64 = 1469598103934665603;
-const PROBE_PRIME: u64 = 1099511628211;
 
 const Mode = enum {
     encode_memory,
@@ -125,25 +92,16 @@ const Mode = enum {
 const Request = struct {
     mode: Mode = .encode_memory,
     chunk_size: usize = STREAM_INPUT_SIZE,
-    iterations: usize = 1,
+    chunk_explicit: bool = false,
     input_path: []const u8,
-    raw: bool = false,
-    expected_probe: ?u64 = null,
-};
-
-const Conversion = struct {
-    input_bytes: usize,
-    output_bytes: usize,
-    probe: u64,
 };
 
 fn convertMemory(
     allocator: std.mem.Allocator,
     io: Io,
     request: Request,
-    track_probe: bool,
-    destination: ?*Io.Writer,
-) !Conversion {
+    destination: *Io.Writer,
+) !void {
     var file = try openInputFile(io, request.input_path);
     defer file.close(io);
     const encoding = request.mode.encoding();
@@ -154,21 +112,14 @@ fn convertMemory(
         try base64.encodeInPlace(whole.buffer, whole.input_len)
     else
         try base64.decodeInPlace(whole.buffer[0..whole.input_len]);
-    var probe: Probe = .init(output_len);
-    try emit(&probe, whole.buffer[0..output_len], track_probe, destination);
-    return .{
-        .input_bytes = whole.input_len,
-        .output_bytes = output_len,
-        .probe = if (track_probe) probe.finish() else 0,
-    };
+    try destination.writeAll(whole.buffer[0..output_len]);
 }
 
 fn convertStreaming(
     io: Io,
     request: Request,
-    track_probe: bool,
-    destination: ?*Io.Writer,
-) !Conversion {
+    destination: *Io.Writer,
+) !void {
     var input_buffer: [STREAM_INPUT_SIZE]u8 = undefined;
     var output_buffer: [STREAM_OUTPUT_SIZE]u8 = undefined;
     var file = try openInputFile(io, request.input_path);
@@ -177,20 +128,20 @@ fn convertStreaming(
     const encoding = request.mode.encoding();
     const input_bytes = std.math.cast(usize, (try file.stat(io)).size) orelse
         return error.InputTooLarge;
-    const output_bytes = if (encoding)
+    const expected_output_bytes: ?usize = if (encoding)
         try base64.encodedSize(input_bytes)
     else
-        try streamingDecodedSize(io, file, input_bytes);
-    var probe: Probe = .init(output_bytes);
+        null;
     var reader = file.reader(io, &.{});
     var encoder: base64.Encoder = .{};
     var decoder: base64.Decoder = .{};
     var bytes_read: usize = 0;
+    var output_bytes: usize = 0;
 
     while (true) {
         const read_len = try reader.interface.readSliceShort(&input_buffer);
         if (read_len == 0) break;
-        bytes_read += read_len;
+        bytes_read = std.math.add(usize, bytes_read, read_len) catch return error.InputChanged;
 
         var output_len: usize = 0;
         var chunk_start: usize = 0;
@@ -204,63 +155,44 @@ fn convertStreaming(
                 try decoder.update(chunk, output);
             chunk_start += chunk_len;
         }
-        try emit(&probe, output_buffer[0..output_len], track_probe, destination);
+        output_bytes = try emit(
+            output_bytes,
+            output_buffer[0..output_len],
+            expected_output_bytes,
+            destination,
+        );
     }
 
     const final_len = if (encoding)
         try encoder.final(&output_buffer)
     else
         try decoder.final(&output_buffer);
-    try emit(&probe, output_buffer[0..final_len], track_probe, destination);
+    output_bytes = try emit(
+        output_bytes,
+        output_buffer[0..final_len],
+        expected_output_bytes,
+        destination,
+    );
     if (bytes_read != input_bytes) return error.InputChanged;
-    if (probe.output_offset != output_bytes) return error.OutputLengthMismatch;
-    return .{
-        .input_bytes = input_bytes,
-        .output_bytes = output_bytes,
-        .probe = if (track_probe) probe.finish() else 0,
-    };
+    if (expected_output_bytes) |expected| {
+        if (output_bytes != expected) return error.OutputLengthMismatch;
+    }
 }
 
-fn emit(probe: *Probe, data: []const u8, track_probe: bool, destination: ?*Io.Writer) !void {
-    probe.feed(data, track_probe);
-    if (destination) |writer| try writer.writeAll(data);
+fn emit(
+    output_bytes: usize,
+    data: []const u8,
+    expected_output_bytes: ?usize,
+    destination: *Io.Writer,
+) !usize {
+    const next_output_bytes = std.math.add(usize, output_bytes, data.len) catch
+        return error.OutputLengthMismatch;
+    if (expected_output_bytes) |expected| {
+        if (next_output_bytes > expected) return error.OutputLengthMismatch;
+    }
+    try destination.writeAll(data);
+    return next_output_bytes;
 }
-
-/// FNV-1a over the output length, every 64th output byte, and the last output byte. Sample
-/// positions depend only on output offsets, so memory and streaming runs report equal probes.
-const Probe = struct {
-    value: u64 = PROBE_OFFSET,
-    output_offset: usize = 0,
-    next_sample: usize = 0,
-    last_byte: ?u8 = null,
-
-    fn init(output_len: usize) Probe {
-        var probe: Probe = .{};
-        const length: u64 = output_len;
-        for (0..8) |shift| probe.mix(@truncate(length >> @intCast(shift * 8)));
-        return probe;
-    }
-
-    fn mix(self: *Probe, byte: u8) void {
-        self.value ^= byte;
-        self.value *%= PROBE_PRIME;
-    }
-
-    fn feed(self: *Probe, data: []const u8, track_probe: bool) void {
-        if (track_probe) {
-            while (self.next_sample < self.output_offset + data.len) : (self.next_sample += 64) {
-                self.mix(data[self.next_sample - self.output_offset]);
-            }
-            if (data.len != 0) self.last_byte = data[data.len - 1];
-        }
-        self.output_offset += data.len;
-    }
-
-    fn finish(self: *Probe) u64 {
-        if (self.last_byte) |byte| self.mix(byte);
-        return self.value;
-    }
-};
 
 const WholeInput = struct {
     buffer: []u8,
@@ -293,17 +225,6 @@ fn wholeCapacity(input_len: usize, encoding: bool) !usize {
     return if (encoding) base64.encodedSize(input_len) else input_len;
 }
 
-/// Returns the decoded length from the file size and the final group, so the probe can hash it
-/// before streaming. Malformed input gets an estimate; decoding then fails in input order.
-fn streamingDecodedSize(io: Io, file: Io.File, input_bytes: usize) !usize {
-    if (input_bytes < 4 or input_bytes % 4 != 0) return input_bytes / 4 * 3;
-    var tail: [4]u8 = undefined;
-    if (try file.readPositionalAll(io, &tail, input_bytes - 4) != tail.len) {
-        return error.InputChanged;
-    }
-    return input_bytes / 4 * 3 - 3 + (base64.decodedSize(&tail) catch 3);
-}
-
 fn openInputFile(io: Io, path: []const u8) !Io.File {
     if (std.fs.path.isAbsolute(path)) return Io.Dir.openFileAbsolute(io, path, .{});
     return Io.Dir.cwd().openFile(io, path, .{});
@@ -312,8 +233,7 @@ fn openInputFile(io: Io, path: []const u8) !Io.File {
 fn usage() error{InvalidArguments} {
     std.debug.print(
         \\usage: custom-base64 --version
-        \\       custom-base64 [--mode MODE] [--chunk N] [--iterations N]
-        \\           [--raw | --expected-probe HEX] INPUT
+        \\       custom-base64 [--mode MODE] [--chunk N] INPUT
         \\MODE: encode-memory (default), decode-memory, encode-streaming, decode-streaming
         \\
     , .{});
@@ -330,15 +250,7 @@ fn parseRequest(first: []const u8, args: *std.process.Args.Iterator) !Request {
         } else if (std.mem.eql(u8, arg, "--chunk")) {
             const value = args.next() orelse return error.InvalidArguments;
             request.chunk_size = try parsePositive(value);
-        } else if (std.mem.eql(u8, arg, "--iterations")) {
-            const value = args.next() orelse return error.InvalidArguments;
-            request.iterations = try parsePositive(value);
-        } else if (std.mem.eql(u8, arg, "--raw")) {
-            request.raw = true;
-        } else if (std.mem.eql(u8, arg, "--expected-probe")) {
-            const value = args.next() orelse return error.InvalidArguments;
-            const text = if (std.mem.startsWith(u8, value, "0x")) value[2..] else value;
-            request.expected_probe = try std.fmt.parseInt(u64, text, 16);
+            request.chunk_explicit = true;
         } else if (arg.len == 0 or arg[0] == '-') {
             return error.InvalidArguments;
         } else if (request.input_path.len != 0) {
@@ -348,9 +260,8 @@ fn parseRequest(first: []const u8, args: *std.process.Args.Iterator) !Request {
         }
         current = args.next();
     }
-    if (request.input_path.len == 0 or (request.raw and request.expected_probe != null)) {
-        return error.InvalidArguments;
-    }
+    if (request.input_path.len == 0) return error.InvalidArguments;
+    if (request.chunk_explicit and !request.mode.streaming()) return error.InvalidArguments;
     return request;
 }
 

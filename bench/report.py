@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verify, measure, and render the two retained B64Z benchmark reports."""
+"""Build, verify, measure, and render the two retained B64Z benchmark reports."""
 
 from __future__ import annotations
 
@@ -13,6 +13,7 @@ import platform
 import shlex
 import shutil
 import subprocess
+import sys
 import tempfile
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -20,12 +21,15 @@ from pathlib import Path
 from typing import Iterable
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+from tools.peer_config import PEERS, PEER_BY_ID, Peer, aklomp_command, peer_command
+
 BENCH_ROOT = ROOT / "bench"
 DATA_ROOT = ROOT / "data"
 BENCH_DATA_ROOT = DATA_ROOT / "bench"
 FIXTURE_ROOT = DATA_ROOT / "fixture"
 WORK_ROOT = BENCH_ROOT / "work"
-REFERENCE_BINARY = ROOT / "tools" / "bin" / "aklomp-base64"
+REFERENCE_BINARY = PEER_BY_ID["aklomp"].executable
 REFERENCE_CACHE = WORK_ROOT / "inputs" / "reference.cache"
 
 MODES = (
@@ -36,10 +40,14 @@ MODES = (
 )
 SIZE_NAMES = ("tiny", "small", "medium", "large", "huge")
 CHUNKS = {
-    "encode-memory": 65536,
-    "decode-memory": 65536,
     "encode-streaming": 8191,
     "decode-streaming": 4093,
+}
+FIXTURE_CHUNKS = {
+    "encode-memory": None,
+    "encode-streaming": 7,
+    "decode-memory": None,
+    "decode-streaming": 5,
 }
 DEFAULT_RUNS = 20
 DEFAULT_WARMUP = 5
@@ -134,85 +142,6 @@ TARGETS = {
     "linux-x86-avx2": Target("linux-x86-avx2", "haswell", "avx2"),
     "linux-x86-scalar": Target("linux-x86-scalar", "x86_64", "scalar"),
 }
-
-
-@dataclass(frozen=True)
-class Peer:
-    id: str
-    label: str
-    executable: Path
-    version: str
-    encode_args: tuple[str, ...]
-    decode_args: tuple[str, ...]
-    modes: tuple[str, ...]
-
-
-PEERS = (
-    Peer(
-        "aklomp",
-        "Aklomp",
-        ROOT / "tools/bin/aklomp-base64",
-        "aklomp/base64 bf058e571ac5002b75b03fed38e33ed4e8d45eff, upstream make",
-        ("--wrap=0",),
-        ("--decode", "--no-strip-newlines"),
-        ("encode-streaming", "decode-streaming"),
-    ),
-    Peer(
-        "simdutf",
-        "simdutf",
-        ROOT / "tools/bin/simdutf-fastbase64",
-        "simdutf v9.2.0 8abc1d7a466bc882c2d72e1effd8661492db257c, Release CMake and direct C++ adapter",
-        (),
-        ("--decode",),
-        ("encode-memory", "decode-memory"),
-    ),
-    Peer(
-        "coreutils",
-        "GNU coreutils",
-        ROOT / "tools/bin/coreutils-base64",
-        "GNU coreutils base64 9.11, local build flags -g -O2",
-        ("-w", "0"),
-        ("--decode",),
-        ("encode-streaming", "decode-streaming"),
-    ),
-    Peer(
-        "turbo",
-        "Turbo-Base64",
-        ROOT / "tools/bin/turbo-base64",
-        "Turbo-Base64 d9e584363280055ba6355938a48dc3711183f50f, upstream make and direct C adapter",
-        (),
-        ("--decode",),
-        ("encode-memory", "decode-memory"),
-    ),
-    Peer(
-        "rust-base64",
-        "Rust base64",
-        ROOT / "tools/bin/rust-base64-simd",
-        "Rust base64 crate 0.23.1, Simd engine, Cargo release fat LTO",
-        (),
-        ("--decode",),
-        ("encode-memory", "decode-memory"),
-    ),
-    Peer(
-        "rust-simd",
-        "Rust base64-simd",
-        ROOT / "tools/bin/rust-base64-simd-crate",
-        "Rust base64-simd crate 0.8.0, Cargo release fat LTO",
-        (),
-        ("--decode",),
-        ("encode-memory", "decode-memory"),
-    ),
-    Peer(
-        "zig-std",
-        "Zig std.base64",
-        ROOT / "tools/bin/zig-std-base64",
-        "Zig 0.16.0 std.base64, ReleaseFast -Dcpu=native adapter",
-        (),
-        ("--decode",),
-        ("encode-memory", "decode-memory"),
-    ),
-)
-PEER_BY_ID = {peer.id: peer for peer in PEERS}
 
 
 @dataclass(frozen=True)
@@ -372,6 +301,47 @@ def require_files(target: Target) -> None:
         raise BenchmarkError("missing executable(s): " + ", ".join(missing))
 
 
+def build_target(arguments: argparse.Namespace) -> None:
+    target = TARGETS[arguments.target]
+    if platform.system() != "Linux" or platform.machine() != "x86_64":
+        raise BenchmarkError("the benchmark runner requires Linux x86_64")
+    if target.backend == "avx2":
+        try:
+            cpu_info = Path("/proc/cpuinfo").read_text(encoding="utf-8")
+        except OSError as error:
+            raise BenchmarkError(f"cannot inspect /proc/cpuinfo: {error}") from error
+        has_avx2 = any(
+            "avx2" in line.split()
+            for line in cpu_info.splitlines()
+            if line.startswith("flags")
+        )
+        if not has_avx2:
+            raise BenchmarkError("this CPU does not report AVX2")
+
+    zig = shutil.which("zig")
+    if zig is None:
+        raise BenchmarkError("zig is not on PATH")
+    command = [
+        zig,
+        "build",
+        f"-Dcpu={target.cpu}",
+        "-Doptimize=ReleaseFast",
+        "-Dstrip=true",
+        "--prefix",
+        str(target.directory),
+    ]
+    print(f"building {target.id} with zig -Dcpu={target.cpu} -Doptimize=ReleaseFast -Dstrip=true")
+    result = run_command(command)
+    if result.returncode != 0:
+        raise BenchmarkError(
+            "B64Z build failed: " + error_text(result)
+        )
+    version = version_text([str(target.binary), "--version"])
+    if f"backend={target.backend}" not in version or "optimize=ReleaseFast" not in version:
+        raise BenchmarkError(f"unexpected B64Z build: {version}")
+    print(version)
+
+
 def current_encoded(case: Case) -> bool:
     try:
         raw_stat = case.raw_path.stat()
@@ -421,7 +391,7 @@ def prepare_inputs(cases: Iterable[Case]) -> int:
         temporary = case.encoded_path.with_name(
             f".{case.encoded_path.name}.{os.getpid()}.tmp"
         )
-        command = [str(REFERENCE_BINARY), "--wrap=0", str(case.raw_path)]
+        command = aklomp_command(case.raw_path)
         try:
             result = write_process_output(command, temporary)
             if result.returncode != 0:
@@ -442,21 +412,12 @@ def prepare_inputs(cases: Iterable[Case]) -> int:
 def b64z_command(
     target: Target, mode: str, input_path: Path, chunk: int | None = None
 ) -> list[str]:
-    selected_chunk = CHUNKS[mode] if chunk is None else chunk
-    return [
-        str(target.binary),
-        "--mode",
-        mode,
-        "--chunk",
-        str(selected_chunk),
-        "--raw",
-        str(input_path),
-    ]
-
-
-def peer_command(peer: Peer, mode: str, input_path: Path) -> list[str]:
-    args = peer.decode_args if mode.startswith("decode-") else peer.encode_args
-    return [str(peer.executable), *args, str(input_path)]
+    command = [str(target.binary), "--mode", mode]
+    selected_chunk = CHUNKS.get(mode) if chunk is None else chunk
+    if selected_chunk is not None:
+        command.extend(("--chunk", str(selected_chunk)))
+    command.append(str(input_path))
+    return command
 
 
 def command_text(command: list[str]) -> str:
@@ -471,17 +432,11 @@ def command_text(command: list[str]) -> str:
 
 def public_command_text(tool: str, mode: str) -> str:
     if tool == "b64z":
-        return shlex.join(
-            [
-                "B64Z",
-                "--mode",
-                mode,
-                "--chunk",
-                str(CHUNKS[mode]),
-                "--raw",
-                "INPUT",
-            ]
-        )
+        command = ["B64Z", "--mode", mode]
+        if mode in CHUNKS:
+            command.extend(("--chunk", str(CHUNKS[mode])))
+        command.append("INPUT")
+        return shlex.join(command)
     peer = PEER_BY_ID[tool]
     args = peer.decode_args if mode.startswith("decode-") else peer.encode_args
     return shlex.join([tool, *args, "INPUT"])
@@ -512,30 +467,30 @@ def verify(target: Target, cases: tuple[Case, ...]) -> str:
         temporary = Path(directory)
         for raw_path in valid:
             encoded_path = raw_path.with_suffix(".b64")
-            for mode, chunk in (("encode-memory", 64), ("encode-streaming", 7)):
+            for mode in ("encode-memory", "encode-streaming"):
                 compare_output(
-                    b64z_command(target, mode, raw_path, chunk),
+                    b64z_command(target, mode, raw_path, FIXTURE_CHUNKS[mode]),
                     encoded_path,
                     temporary / f"target-{raw_path.stem}-{mode}.b64",
                     f"B64Z {mode} fixture {raw_path.name}",
                 )
                 target_checks += 1
-            for mode, chunk in (("decode-memory", 64), ("decode-streaming", 5)):
+            for mode in ("decode-memory", "decode-streaming"):
                 compare_output(
-                    b64z_command(target, mode, encoded_path, chunk),
+                    b64z_command(target, mode, encoded_path, FIXTURE_CHUNKS[mode]),
                     raw_path,
                     temporary / f"target-{raw_path.stem}-{mode}.bin",
                     f"B64Z {mode} fixture {raw_path.name}",
                 )
                 target_checks += 1
             compare_output(
-                [str(REFERENCE_BINARY), "--wrap=0", str(raw_path)],
+                aklomp_command(raw_path),
                 encoded_path,
                 temporary / f"reference-{raw_path.stem}.b64",
                 f"Aklomp encode fixture {raw_path.name}",
             )
             compare_output(
-                [str(REFERENCE_BINARY), "--decode", "--no-strip-newlines", str(encoded_path)],
+                aklomp_command(encoded_path, decode=True),
                 raw_path,
                 temporary / f"reference-{raw_path.stem}.bin",
                 f"Aklomp decode fixture {raw_path.name}",
@@ -544,10 +499,10 @@ def verify(target: Target, cases: tuple[Case, ...]) -> str:
 
         for encoded_path in invalid:
             expected_error = encoded_path.with_suffix(".error").read_text(encoding="utf-8").strip()
-            for mode, chunk in (("decode-memory", 64), ("decode-streaming", 5)):
+            for mode in ("decode-memory", "decode-streaming"):
                 output = temporary / f"target-invalid-{encoded_path.stem}-{mode}.bin"
                 result = write_process_output(
-                    b64z_command(target, mode, encoded_path, chunk), output
+                    b64z_command(target, mode, encoded_path, FIXTURE_CHUNKS[mode]), output
                 )
                 if result.returncode == 0:
                     raise BenchmarkError(
@@ -618,7 +573,6 @@ def zebrac_path() -> Path:
     found = shutil.which("zebrac")
     if found:
         candidates.append(Path(found))
-    candidates.append(Path("/home/eke/bin/zebrac"))
     for candidate in candidates:
         if candidate.is_file() and os.access(candidate, os.X_OK):
             return candidate.resolve()
@@ -644,14 +598,39 @@ def git_value(args: list[str]) -> str:
 
 
 def git_has_changes() -> bool:
+    generated_reports = [
+        f":(exclude)bench/{target.id}/{name}"
+        for target in TARGETS.values()
+        for name in ("README.md", "measurements.tsv", "summary.tsv")
+    ]
+    generated_reports.extend(
+        f":(exclude,glob)bench/{target.id}/figures/*.svg"
+        for target in TARGETS.values()
+    )
     result = subprocess.run(
-        ["git", "status", "--porcelain", "--untracked-files=all"],
+        [
+            "git",
+            "status",
+            "--porcelain",
+            "--untracked-files=all",
+            "--",
+            ".",
+            *generated_reports,
+        ],
         cwd=ROOT,
         stdout=subprocess.PIPE,
         stderr=subprocess.DEVNULL,
         check=False,
     )
     return result.returncode != 0 or bool(result.stdout.strip())
+
+
+def require_clean_worktree(action: str) -> None:
+    if git_has_changes():
+        raise BenchmarkError(
+            f"refusing to {action} with project changes in the Git worktree; "
+            "commit or clean those changes first"
+        )
 
 
 def environment_metadata(
@@ -1645,7 +1624,7 @@ def report_text(
         "",
         "## Terms",
         "",
-        "In a mode name, `memory` describes complete-input processing, not the memory metric. B64Z reads the complete input into an allocated buffer and allocates a complete output buffer. `Streaming` describes incremental processing through fixed input and output buffers.",
+        "For B64Z, `memory` means the command reads the complete input into one buffer and converts it in place. `Streaming` means the command uses fixed input and output buffers. The benchmark method and input details are in the [benchmark README](../README.md).",
         "",
         "`Peak RSS` is the per-sample maximum resident set size reported by Zebrac for the timed process. The table and ratios use the mean of those per-sample peaks. It includes the executable, runtime, file I/O buffers, codec state, and resident input or output allocations; it is not the size of one buffer. `RSS / B64Z` compares that process value with B64Z in the same mode and input case.",
         "",
@@ -1672,7 +1651,7 @@ def report_text(
             "",
             "## Figures",
             "",
-            "The throughput figure averages the five data forms at each size: general bytes, float32 raw, float32 zlib, float64 raw, and float64 zlib. The isocost figure shows one small dot for each of the 25 cases, larger markers for geometric means, middle-50% error bars, and dotted curves for the combined cost C = (wall time / B64Z) * (peak RSS / B64Z). Lower curves are better.",
+            "The figures use the inputs and method described in the [benchmark README](../README.md).",
             "",
             "<p align=\"center\">",
             "  <picture>",
@@ -1690,23 +1669,21 @@ def report_text(
             "  </picture>",
             "</p>",
             "",
-            "## What was measured",
-            "",
-            "Each row starts one named command for one input. The command reads a file and writes Base64 or decoded bytes to standard output. Zebrac discards child output during timing, so byte comparison runs before measurement. Process startup, file reads, allocation, encoding or decoding, and standard-output writes are included in the measured process.",
+            "## Measurement",
             "",
             f"Zebrac ran `{metadata.get('samples', 'unknown')}` measured samples after `{metadata.get('warmup', 'unknown')}` warmups, with a `{metadata.get('duration_ms', 'unknown')} ms` duration ceiling and an exact maximum sample count. Every recorded command has zero failed samples.",
             "",
-            f"B64Z uses chunk `{CHUNKS['encode-memory']}` for both memory command lines and chunks `{CHUNKS['encode-streaming']}` and `{CHUNKS['decode-streaming']}` for the two streaming command lines. The memory command passes the chunk flag for a stable command record; its whole-file path does not use the streaming buffer.",
+            f"B64Z passes chunks `{CHUNKS['encode-streaming']}` and `{CHUNKS['decode-streaming']}` to the streaming command lines. Memory command lines do not pass `--chunk`.",
             "",
             verification_line,
             "",
-            "The byte checks compare B64Z and every selected peer against the canonical padded bytes produced by Aklomp.",
+            "The byte checks compare B64Z and every selected peer against Aklomp's canonical padded bytes.",
             "",
             control_line,
             "",
             "## Data",
             "",
-            "The benchmark contains 25 byte inputs: 5 general inputs, 10 float32 mzML payload inputs, and 10 float64 mzML payload inputs. Each size has five forms: general bytes, float32 raw, float32 zlib, float64 raw, and float64 zlib. `tiny` is 256 B, `small` is 16 KiB, `medium` is 1 MiB, `large` is 8 MiB, and `huge` is 32 MiB. The zlib files are compressed payload bytes, not XML documents.",
+            "The case sizes, byte forms, and compression details are listed in the [benchmark README](../README.md).",
             "",
             "## Tools and versions",
             "",
@@ -1720,7 +1697,7 @@ def report_text(
     lines.extend(
         [
             "",
-            "Aklomp and GNU Coreutils appear only in streaming rows because their selected commands process files incrementally. simdutf, Turbo-Base64, Rust base64, Rust base64-simd, and Zig std.base64 appear only in memory rows because their selected adapters allocate complete input and output buffers.",
+            "Peer commands and their mode coverage are described in [Local Peer Tools](../../tools/tool.md).",
             "",
         ]
     )
@@ -1731,19 +1708,15 @@ def report_text(
             "",
             f"- Host: `{metadata.get('cpu_model', 'unknown')}`, `{metadata.get('architecture', 'unknown')}`, `{metadata.get('cpu_count', 'unknown')} logical CPUs`.",
             f"- Kernel: `{metadata.get('kernel', 'unknown')}`; CPU governor: `{metadata.get('cpu_governor', 'unknown')}`.",
-            f"- Git commit: `{metadata.get('git_commit', 'unknown')}`; worktree changes at measurement time: `{metadata.get('git_changes', 'unknown')}`.",
+            f"- Git commit: `{metadata.get('git_commit', 'unknown')}`; project changes at measurement time: `{metadata.get('git_changes', 'unknown')}`.",
             f"- Runner: `{metadata.get('zebrac_version', 'unknown')}`; gnuplot: `{metadata.get('gnuplot_version', 'unknown')}`; Zig: `{metadata.get('zig_version', 'unknown')}`.",
             f"- Host tools: GCC `{metadata.get('gcc_version', 'unknown')}`; Clang `{metadata.get('clang_version', 'unknown')}`; Rust `{metadata.get('rustc_version', 'unknown')}`; Cargo `{metadata.get('cargo_version', 'unknown')}`; CMake `{metadata.get('cmake_version', 'unknown')}`; Make `{metadata.get('make_version', 'unknown')}`.",
             "- The file cache is warm after verification. The runner does not pin processes to a CPU or flush the page cache.",
-            "- These numbers describe the named commands, adapters, and builds on this host. They do not describe a peer library without its command adapter or a different compiler build.",
-            "- The target choice changes the B64Z build only. Peer binaries keep their own native build and runtime dispatch settings. The scalar page is not a scalar-for-every-peer instruction-set test.",
+            "- The target changes the B64Z build. Peer binaries keep their native build and runtime dispatch settings.",
             "",
             "## Files",
             "",
-            "- [`measurements.tsv`](measurements.tsv) contains one row for every measured command and input, including sample quartiles and a public command label.",
-            "- [`summary.tsv`](summary.tsv) contains the values used by the tables and figures.",
-            "",
-            "The report does not produce one report per input. The table and the two figures cover the complete 100 groups without turning each input into a separate publication page.",
+            "[`measurements.tsv`](measurements.tsv) contains the measured rows. [`summary.tsv`](summary.tsv) contains the values used by the table and figures.",
             "",
         ]
     )
@@ -1751,6 +1724,7 @@ def report_text(
 
 
 def render(target: Target) -> None:
+    require_clean_worktree("write a benchmark report")
     target_dir = target.directory
     metadata, rows = read_measurements(target_dir / "measurements.tsv")
     summary = build_summary(rows)
@@ -1764,34 +1738,35 @@ def render(target: Target) -> None:
 
 def run(arguments: argparse.Namespace) -> None:
     target = TARGETS[arguments.target]
+    if not arguments.skip_benchmarks:
+        require_clean_worktree("measure")
     cases = discover_cases()
     require_files(target)
     generated = prepare_inputs(cases)
-    zebrac = zebrac_path()
-    metadata = environment_metadata(
-        target,
-        zebrac,
-        now_utc(),
-        f"{generated} regenerated",
-        "skipped" if arguments.skip_verify else "passed",
-    )
-    metadata.update(
-        {
-            "runs": str(arguments.runs),
-            "samples": str(arguments.runs),
-            "warmup": str(arguments.warmup),
-            "duration_ms": str(arguments.duration),
-            "case_count": str(len(cases)),
-            "group_count": str(len(MODES) * len(cases)),
-        }
-    )
     if not arguments.skip_verify:
         print("verifying canonical bytes before timing")
         print(verify(target, cases))
-        metadata["verification"] = "passed"
     else:
         print("verification skipped by request")
     if not arguments.skip_benchmarks:
+        zebrac = zebrac_path()
+        metadata = environment_metadata(
+            target,
+            zebrac,
+            now_utc(),
+            f"{generated} regenerated",
+            "skipped" if arguments.skip_verify else "passed",
+        )
+        metadata.update(
+            {
+                "runs": str(arguments.runs),
+                "samples": str(arguments.runs),
+                "warmup": str(arguments.warmup),
+                "duration_ms": str(arguments.duration),
+                "case_count": str(len(cases)),
+                "group_count": str(len(MODES) * len(cases)),
+            }
+        )
         print(
             f"measuring {target.id} with {arguments.runs} samples and {arguments.warmup} warmups"
         )
@@ -1819,6 +1794,10 @@ def parser() -> argparse.ArgumentParser:
     run_parser.add_argument("--skip-report", action="store_true")
     run_parser.set_defaults(handler=run)
 
+    build_parser = commands.add_parser("build", help="build one B64Z benchmark target")
+    build_parser.add_argument("--target", choices=sorted(TARGETS), required=True)
+    build_parser.set_defaults(handler=build_target)
+
     render_parser = commands.add_parser(
         "render", help="render a report from measurements.tsv"
     )
@@ -1837,7 +1816,7 @@ def main() -> int:
                 )
         arguments.handler(arguments)
     except (BenchmarkError, OSError, subprocess.SubprocessError, ValueError) as error:
-        print(f"error: {error}", file=os.sys.stderr)
+        print(f"error: {error}", file=sys.stderr)
         return 1
     return 0
 

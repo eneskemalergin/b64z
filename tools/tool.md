@@ -94,7 +94,7 @@ The first Rust row measures the current SIMD engine in the widely used general c
 - Source: the Zig 0.16.0 standard library installed for this repository.
 - Language: Zig.
 - Selection: standard-library reference peer, not a second copy of B64Z.
-- Build: `zig build-exe -O ReleaseFast -Dcpu=native` for the local adapter.
+- Build: `zig build-exe -O ReleaseFast -mcpu=native` for the local adapter.
 - Executable: the locally built Zig standard-library command.
 - Adapter: a direct file-to-stdout wrapper around `std.base64.standard`.
 - Difference: standard-library padding and error behavior are recorded separately from B64Z strict behavior.

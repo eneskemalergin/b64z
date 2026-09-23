@@ -1,4 +1,8 @@
-//! File adapter for Zig's standard-library Base64 codec.
+//! Comparison peer: a file adapter around Zig's standard-library Base64 codec.
+//!
+//! It is not part of B64Z. It reads the whole input file, calls `std.base64.standard` unchanged,
+//! and writes the result to standard output. `--decode` selects decoding; `--encode` or no flag
+//! selects encoding.
 
 const std = @import("std");
 
@@ -13,50 +17,36 @@ pub fn main(init: std.process.Init.Minimal) !void {
 
     _ = args.next();
     const first = args.next() orelse return usage();
-    var decode = false;
-    const input_path = if (std.mem.eql(u8, first, "--decode")) blk: {
-        decode = true;
-        break :blk args.next() orelse return usage();
-    } else if (std.mem.eql(u8, first, "--encode")) blk: {
-        break :blk args.next() orelse return usage();
-    } else first;
+    const decode = std.mem.eql(u8, first, "--decode");
+    const input_path = if (decode or std.mem.eql(u8, first, "--encode"))
+        args.next() orelse return usage()
+    else
+        first;
     if (args.next() != null) return usage();
 
-    const input = try readInput(io, allocator, input_path);
+    const input = try Io.Dir.cwd().readFileAlloc(io, input_path, allocator, .unlimited);
     defer allocator.free(input);
 
-    const output_capacity = if (decode)
-        try std.base64.standard.Decoder.calcSizeForSlice(input)
+    const codec = std.base64.standard;
+    const output_len = if (decode)
+        try codec.Decoder.calcSizeForSlice(input)
     else
-        std.base64.standard.Encoder.calcSize(input.len);
-    const output = try allocator.alloc(u8, @max(output_capacity, 1));
+        codec.Encoder.calcSize(input.len);
+    const output = try allocator.alloc(u8, output_len);
     defer allocator.free(output);
+    if (decode) {
+        try codec.Decoder.decode(output, input);
+    } else {
+        _ = codec.Encoder.encode(output, input);
+    }
 
-    const result = if (decode) blk: {
-        try std.base64.standard.Decoder.decode(output[0..output_capacity], input);
-        break :blk output[0..output_capacity];
-    } else std.base64.standard.Encoder.encode(output, input);
-    try writeBytes(io, result);
+    var stdout_buffer: [4096]u8 = undefined;
+    var stdout = Io.File.stdout().writer(io, &stdout_buffer);
+    try stdout.interface.writeAll(output);
+    try stdout.interface.flush();
 }
 
 fn usage() error{InvalidArguments} {
-    std.debug.print("usage: zig-std-base64 [--decode] INPUT\n", .{});
+    std.debug.print("usage: zig-std-base64 [--encode | --decode] INPUT\n", .{});
     return error.InvalidArguments;
-}
-
-fn readInput(io: Io, allocator: std.mem.Allocator, path: []const u8) ![]u8 {
-    if (!std.fs.path.isAbsolute(path)) {
-        return std.Io.Dir.cwd().readFileAlloc(io, path, allocator, .unlimited);
-    }
-    var file = try std.Io.Dir.openFileAbsolute(io, path, .{});
-    defer file.close(io);
-    var reader = file.reader(io, &.{});
-    return reader.interface.allocRemaining(allocator, .unlimited);
-}
-
-fn writeBytes(io: Io, data: []const u8) !void {
-    var buffer: [4096]u8 = undefined;
-    var stdout = std.Io.File.stdout().writer(io, &buffer);
-    try stdout.interface.writeAll(data);
-    try stdout.interface.flush();
 }

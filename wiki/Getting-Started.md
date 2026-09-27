@@ -21,7 +21,7 @@ zig build -Dcpu=x86_64 -Doptimize=ReleaseFast -Dstrip=true
 ./zig-out/bin/custom-base64 --version
 ```
 
-That command replaces the installed executable and reports `backend=scalar`. It changes the CPU requirement, not the operating system or executable format. The library's [backend selection](API.md#backend-selection) happens at compile time.
+That command replaces the installed executable and reports `backend=scalar`. It changes the CPU requirement, not the operating system or executable format. The library's [backend selection](API#backend-selection) happens at compile time.
 
 ## Convert a file
 
@@ -36,7 +36,7 @@ cmp hello.bin hello.decoded
 
 `hello.b64` contains exactly `aGVsbG8=`, without a newline. `cmp` exits successfully without printing anything when the decoded bytes match. Do not redirect output to the input path: the shell truncates that file before the converter opens it.
 
-Read [Command line](Command-Line.md) for the four modes, `--chunk`, and partial-output behavior. Read [Library guide](Library-Guide.md) to call the codec from Zig.
+Read [Command line](Command-Line) for the four modes, `--chunk`, and partial-output behavior. Read [Library guide](Library-Guide) to call the codec from Zig.
 
 ## Run the tests
 

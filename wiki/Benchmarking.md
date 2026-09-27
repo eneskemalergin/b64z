@@ -34,7 +34,7 @@ For zlib cases, the size label describes the array before compression, not the s
 > [!NOTE]
 > **Peer settings and memory allocation**
 >
-> Peers retain the build and CPU dispatch settings described in [Benchmark tools](Benchmark-Tools.md), including AVX2 for the tools built to use it. The scalar target changes B64Z only.
+> Peers retain the build and CPU dispatch settings described in [Benchmark tools](Benchmark-Tools), including AVX2 for the tools built to use it. The scalar target changes B64Z only.
 >
 > B64Z's memory modes convert in place and request Linux transparent huge pages for large buffers. Our peer memory adapters use separate input and output buffers; we did not add huge-page advice to them. The reported command time and peak RSS include these allocation differences, along with startup, file I/O, and codec work.
 
@@ -67,7 +67,7 @@ bash bench/linux-x86-avx2/run.sh
 bash bench/linux-x86-scalar/run.sh
 ```
 
-The scripts require Linux x86-64, Zig 0.16.0, Python 3.10 or newer, the selected peer executables, Zebrac with access to Linux performance counters, and gnuplot. [Benchmark tools](Benchmark-Tools.md) lists peer builds, adapters, and byte-check commands. The runner builds B64Z, not the peers.
+The scripts require Linux x86-64, Zig 0.16.0, Python 3.10 or newer, the selected peer executables, Zebrac with access to Linux performance counters, and gnuplot. [Benchmark tools](Benchmark-Tools) lists peer builds, adapters, and byte-check commands. The runner builds B64Z, not the peers.
 
 A publication run uses the default sample policy and byte checks. `--skip-benchmarks --skip-report` builds the selected B64Z target and runs byte checks without Zebrac or gnuplot. The file cache is warm after verification; the runner does not pin a CPU or flush the page cache.
 

@@ -1,6 +1,6 @@
 # Benchmark tools
 
-Peer selection, build settings, and file adapters used by the [benchmark reports](Benchmarking.md).
+Peer selection, build settings, and file adapters used by the [benchmark reports](Benchmarking).
 
 Encoding commands receive the same binary input and write padded Base64 to stdout. Decoding commands receive the same Base64 input and write decoded bytes. Compare speed only after those bytes match the expected output. A peer may accept malformed input that B64Z rejects; the timing comparisons use valid inputs.
 
@@ -177,7 +177,7 @@ The peer commands write directly to redirected stdout. The verifier passes argum
 1. Run the same benchmark input through every peer selected for that mode. The measurement table records case IDs, byte counts, and command arguments, using `INPUT` in place of the file path. The report names source versions, build settings, and host tools; this page explains the accepted-input differences.
 1. Do not compare a peer's malformed-input behavior as a speed row unless its accepted grammar is the same as B64Z's grammar.
 
-The benchmark runner is the only peer byte verifier; external tools stay outside the Zig test executables. [Benchmarking](Benchmarking.md#run) describes the timing commands and report files.
+The benchmark runner is the only peer byte verifier; external tools stay outside the Zig test executables. [Benchmarking](Benchmarking#run) describes the timing commands and report files.
 
 ## Excluded from the default peer set
 

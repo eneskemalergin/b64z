@@ -6,7 +6,7 @@ B64Z: `custom-base64 0.1.0 backend=scalar optimize=ReleaseFast target=x86_64`
 
 ## Terms
 
-For B64Z, `memory` means the command reads the complete input into one buffer and converts it in place. `Streaming` means the command uses fixed input and output buffers. The [benchmark method](../../wiki/Benchmarking.md) describes the inputs and measurements.
+For B64Z, `memory` means the command reads the complete input into one buffer and converts it in place. `Streaming` means the command uses fixed input and output buffers. The [benchmark method](https://github.com/eneskemalergin/b64z/wiki/Benchmarking) describes the inputs and measurements.
 
 `Peak RSS` is the per-sample maximum resident set size reported by Zebrac for the timed process. The table and ratios use the mean of those per-sample peaks. It includes the executable, runtime, file I/O buffers, codec state, and resident input or output allocations; it is not the size of one buffer. `RSS / B64Z` compares that process value with B64Z in the same mode and input case.
 
@@ -17,7 +17,7 @@ The nominal size names are `tiny` = 256 B, `small` = 16 KiB, `medium` = 1 MiB, `
 > [!NOTE]
 > **Peer settings and memory allocation**
 >
-> Peers retain the build and CPU dispatch settings described in [Benchmark tools](../../wiki/Benchmark-Tools.md), including AVX2 for the tools built to use it. The scalar target changes B64Z only.
+> Peers retain the build and CPU dispatch settings described in [Benchmark tools](https://github.com/eneskemalergin/b64z/wiki/Benchmark-Tools), including AVX2 for the tools built to use it. The scalar target changes B64Z only.
 >
 > B64Z's memory modes convert in place and request Linux transparent huge pages for large buffers. Our peer memory adapters use separate input and output buffers; we did not add huge-page advice to them. The reported command time and peak RSS include these allocation differences, along with startup, file I/O, and codec work.
 
@@ -50,7 +50,7 @@ The full-input memory and streaming rows stay separate. A peer appears only in t
 
 ## Figures
 
-The figures use the inputs and method described in [Benchmarking](../../wiki/Benchmarking.md).
+The figures use the inputs and method described in [Benchmarking](https://github.com/eneskemalergin/b64z/wiki/Benchmarking).
 
 <p align="center">
   <picture>
@@ -82,7 +82,7 @@ The largest B64Z A/A mean-time gap on the huge general input was `2.37%` across 
 
 ## Data
 
-The case sizes, byte forms, and compression details are listed in [Benchmarking](../../wiki/Benchmarking.md#input-sizes).
+The case sizes, byte forms, and compression details are listed in [Benchmarking](https://github.com/eneskemalergin/b64z/wiki/Benchmarking#input-sizes).
 
 ## Tools and versions
 
@@ -95,7 +95,7 @@ The case sizes, byte forms, and compression details are listed in [Benchmarking]
 - **Rust base64-simd** (encode-memory, decode-memory): `Rust base64-simd crate 0.8.0, Cargo release fat LTO`.
 - **Zig std.base64** (encode-memory, decode-memory): `Zig 0.16.0 std.base64, ReleaseFast -Dcpu=native adapter`.
 
-Peer commands and their mode coverage are described in [Benchmark tools](../../wiki/Benchmark-Tools.md).
+Peer commands and their mode coverage are described in [Benchmark tools](https://github.com/eneskemalergin/b64z/wiki/Benchmark-Tools).
 
 ## Reading the result
 

@@ -22,7 +22,7 @@ const b64z = b.dependency("b64z", .{
 exe.root_module.addImport("base64", b64z.module("base64"));
 ```
 
-Your Zig code can now use `@import("base64")`. The consumer chooses the target and optimization mode. Importing this module does not build the CLI or run B64Z's tests. The [API reference](API.md) describes backend selection and every public call.
+Your Zig code can now use `@import("base64")`. The consumer chooses the target and optimization mode. Importing this module does not build the CLI or run B64Z's tests. The [API reference](API) describes backend selection and every public call.
 
 ## Run the examples
 
@@ -32,7 +32,7 @@ Each example below is a complete Zig test file. Save the example you want as `ex
 zig test --dep base64 -Mroot=example.zig -Mbase64=src/base64.zig
 ```
 
-This command makes `src/base64.zig` available as `@import("base64")`. It does not build or call the CLI. The [API reference](API.md) lists every public function and its buffer and error rules.
+This command makes `src/base64.zig` available as `@import("base64")`. It does not build or call the CLI. The [API reference](API) lists every public function and its buffer and error rules.
 
 ## Separate input and output
 

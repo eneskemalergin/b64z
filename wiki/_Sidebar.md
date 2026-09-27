@@ -1,20 +1,20 @@
 **B64Z Wiki**
 
-[Home](Home.md)
+[Home](Home)
 
 **Use B64Z**
 
-- [Getting started](Getting-Started.md)
-- [Command line](Command-Line.md)
-- [Library guide](Library-Guide.md)
-- [API reference](API.md)
+- [Getting started](Getting-Started)
+- [Command line](Command-Line)
+- [Library guide](Library-Guide)
+- [API reference](API)
 
 **Benchmarks**
 
-- [Results and method](Benchmarking.md)
-- [Tools and adapters](Benchmark-Tools.md)
+- [Results and method](Benchmarking)
+- [Tools and adapters](Benchmark-Tools)
 
 **Development**
 
-- [Tests, CI, and releases](Development.md)
+- [Tests, CI, and releases](Development)
 - [Changelog](https://github.com/eneskemalergin/b64z/blob/main/CHANGELOG.md)

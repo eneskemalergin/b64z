@@ -21,7 +21,7 @@ pub fn encodeInPlace(buffer: []u8, input_len: usize) Error!usize
 pub fn decodeInPlace(buffer: []u8) Error!usize
 ```
 
-These are signatures, not complete declarations. `Encoder` and `Decoder` each expose `update`, `updateByte`, and `final`, described below. [Library examples](Library-Guide.md) show complete calls and buffer cleanup.
+These are signatures, not complete declarations. `Encoder` and `Decoder` each expose `update`, `updateByte`, and `final`, described below. [Library examples](Library-Guide) show complete calls and buffer cleanup.
 
 `Error` contains `InputTooLarge`, `InvalidCharacter`, `InvalidPadding`, `NoSpaceLeft`, and `OverlappingBuffers`. The sections below state which calls return each error.
 
@@ -98,4 +98,4 @@ Decoder calls return `error.InvalidCharacter` or `error.InvalidPadding` when the
 
 The build selects the backend at compile time. x86-64 builds with AVX2 use the AVX2 block functions; other builds use the scalar functions. The public function names, output bytes, errors, padding rules, and stateful buffer rules do not change with the selected backend. An AVX2 binary does not fall back to scalar on a CPU without AVX2.
 
-See [Getting started](Getting-Started.md#run-the-tests) for the test commands and [Command line](Command-Line.md) for the file converter's modes and options.
+See [Getting started](Getting-Started#run-the-tests) for the test commands and [Command line](Command-Line) for the file converter's modes and options.

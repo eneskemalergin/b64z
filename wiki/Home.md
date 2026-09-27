@@ -6,15 +6,15 @@ The library encodes and decodes caller-owned byte slices without allocating. It 
 
 ## Start here
 
-- [Getting started](Getting-Started.md): build the command with Zig 0.16.0 and check its output.
-- [Command line](Command-Line.md): choose a conversion mode, redirect output, and handle errors.
-- [Library guide](Library-Guide.md): encode, decode, convert in place, and reuse streaming buffers.
-- [API reference](API.md): look up function signatures, output capacity, and error behavior.
-- [Development](Development.md): run CI checks, test release archives, and prepare a release.
+- [Getting started](Getting-Started): build the command with Zig 0.16.0 and check its output.
+- [Command line](Command-Line): choose a conversion mode, redirect output, and handle errors.
+- [Library guide](Library-Guide): encode, decode, convert in place, and reuse streaming buffers.
+- [API reference](API): look up function signatures, output capacity, and error behavior.
+- [Development](Development): run CI checks, test release archives, and prepare a release.
 
 ## Read the benchmarks
 
-[Benchmarking](Benchmarking.md) links the Linux x86-64 AVX2 and scalar results and explains the input sizes, commands, and measurements. [Benchmark tools](Benchmark-Tools.md) describes the selected peers, build settings, and adapters.
+[Benchmarking](Benchmarking) links the Linux x86-64 AVX2 and scalar results and explains the input sizes, commands, and measurements. [Benchmark tools](Benchmark-Tools) describes the selected peers, build settings, and adapters.
 
 ## Current behavior
 

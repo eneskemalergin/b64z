@@ -7,7 +7,7 @@ custom-base64 --version
 custom-base64 [--mode MODE] [--chunk N] INPUT
 ```
 
-The executable is installed at `zig-out/bin/custom-base64`; see [Getting started](Getting-Started.md) for the build commands.
+The executable is installed at `zig-out/bin/custom-base64`; see [Getting started](Getting-Started) for the build commands.
 
 ## Choose a mode
 
@@ -18,7 +18,7 @@ The executable is installed at `zig-out/bin/custom-base64`; see [Getting started
 
 Use streaming for sequential conversion when you do not want storage to grow with file length. Whole-input conversion keeps the complete file in one allocated buffer. Encoding reserves room for the larger encoded result in that same buffer; decoding reuses the encoded input buffer.
 
-Here, `memory` names the way the command processes the input. It is not the process memory measurement called peak RSS. The [benchmark method](Benchmarking.md#compared-operations) explains that measurement.
+Here, `memory` names the way the command processes the input. It is not the process memory measurement called peak RSS. The [benchmark method](Benchmarking#compared-operations) explains that measurement.
 
 On Linux, whole-input conversion asks for transparent huge pages for large, known-size file buffers. This is a request, not a requirement: other systems and kernels that refuse it use ordinary pages with the same output.
 
@@ -59,4 +59,4 @@ The old `encode-one-shot` and `decode-one-shot` names are rejected. Use `encode-
 ./zig-out/bin/custom-base64 --version
 ```
 
-The output identifies the version, selected backend, optimization mode, and target architecture. An AVX2 build requires a CPU with the instructions selected at build time; it does not switch to scalar at runtime. The [build instructions](Getting-Started.md) explain how to select the scalar backend.
+The output identifies the version, selected backend, optimization mode, and target architecture. An AVX2 build requires a CPU with the instructions selected at build time; it does not switch to scalar at runtime. The [build instructions](Getting-Started) explain how to select the scalar backend.

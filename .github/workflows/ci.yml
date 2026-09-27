@@ -1,0 +1,216 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  merge_group:
+  workflow_dispatch:
+  workflow_call:
+    inputs:
+      release:
+        description: Run every check and retain the tested release archives
+        type: boolean
+        default: false
+    outputs:
+      version:
+        description: Version declared by the CLI
+        value: ${{ jobs.checks.outputs.version }}
+
+permissions: {}
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ !inputs.release }}
+
+env:
+  ZIG_VERSION: 0.16.0
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  checks:
+    name: Source checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    outputs:
+      tests: ${{ steps.changes.outputs.tests }}
+      workflows: ${{ steps.changes.outputs.workflows }}
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+
+      - name: Select checks
+        id: changes
+        env:
+          BASE: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before }}
+          RELEASE: ${{ inputs.release || false }}
+        run: |
+          set -euo pipefail
+          tests=true
+          workflows=true
+          if [[ "$RELEASE" != true && -n "$BASE" ]] && git cat-file -e "$BASE^{commit}" 2>/dev/null; then
+            git diff --no-renames --name-only -z "$BASE" HEAD > "$RUNNER_TEMP/changed-files"
+            tests=false
+            workflows=false
+            while IFS= read -r -d '' path; do
+              case "$path" in
+                .github/*) tests=true; workflows=true ;;
+                *.md|wiki/*|assets/*|bench/*/figures/*|bench/*/*.tsv) ;;
+                *) tests=true ;;
+              esac
+            done < "$RUNNER_TEMP/changed-files"
+          fi
+          printf 'tests=%s\nworkflows=%s\n' "$tests" "$workflows" >> "$GITHUB_OUTPUT"
+
+      - name: Check version and release notes
+        id: version
+        env:
+          RELEASE: ${{ inputs.release || false }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          version=$(bash .github/scripts/release.sh version)
+          if [[ "$RELEASE" == true ]]; then
+            bash .github/scripts/release.sh notes "$TAG" > /dev/null
+          else
+            bash .github/scripts/release.sh notes > /dev/null
+          fi
+          printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
+
+      - name: Check shell scripts and Python
+        run: |
+          set -euo pipefail
+          while IFS= read -r -d '' script; do
+            bash -n "$script"
+            shellcheck "$script"
+          done < <(git ls-files -z '*.sh')
+          python3 -m compileall -q bench/report.py tools/base64_data.py tools/peer_config.py
+          python3 -m unittest discover -s tests -p 'test_*.py'
+
+  workflows:
+    name: Workflow checks
+    needs: checks
+    if: needs.checks.outputs.workflows == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Check workflow syntax
+        run: |
+          set -euo pipefail
+          GOBIN="$RUNNER_TEMP/bin" go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
+          "$RUNNER_TEMP/bin/actionlint" -color
+
+      - name: Check workflow security
+        uses: zizmorcore/zizmor-action@cc914d7f3750a2d13d75c7f184a1060aa0e9d482 # v0.6.4
+        with:
+          inputs: .github/
+          advanced-security: false
+          online-audits: false
+          annotations: true
+          version: v1.30.1
+
+  test:
+    name: Test (${{ matrix.backend }})
+    needs: checks
+    if: needs.checks.outputs.tests == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        include:
+          - backend: scalar
+            cpu: x86_64
+          - backend: avx2
+            cpu: haswell
+    env:
+      CPU: ${{ matrix.cpu }}
+      BACKEND: ${{ matrix.backend }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Zig
+        uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
+        with:
+          version: ${{ env.ZIG_VERSION }}
+          cache-key: ${{ matrix.backend }}
+          use-cache: ${{ !inputs.release }}
+
+      - name: Check compiler and CPU
+        run: |
+          set -euo pipefail
+          test "$(zig version)" = "$ZIG_VERSION"
+          test "$(uname -m)" = x86_64
+          if [[ "$BACKEND" == avx2 ]]; then
+            grep -qw avx2 /proc/cpuinfo
+          fi
+
+      - name: Check Zig formatting
+        if: matrix.backend == 'scalar'
+        run: zig fmt --check build.zig src tests tools/wrappers/zig_std_base64.zig
+
+      - name: Test Debug
+        run: zig build test -Dtarget=x86_64-linux -Dcpu="$CPU" --summary all
+
+      - name: Test ReleaseFast
+        run: zig build test -Dtarget=x86_64-linux -Dcpu="$CPU" -Doptimize=ReleaseFast -Dstrip=true --summary all
+
+      - name: Build and test release archive
+        run: bash .github/scripts/release.sh package "$BACKEND" "$RUNNER_TEMP/release"
+
+      - name: Retain tested release archive
+        if: inputs.release
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-${{ matrix.backend }}
+          path: ${{ runner.temp }}/release/*.tar.gz
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
+
+  result:
+    name: CI result
+    if: always()
+    needs: [checks, workflows, test]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    env:
+      CHECKS: ${{ needs.checks.result }}
+      TESTS_NEEDED: ${{ needs.checks.outputs.tests }}
+      TESTS: ${{ needs.test.result }}
+      WORKFLOWS_NEEDED: ${{ needs.checks.outputs.workflows }}
+      WORKFLOWS: ${{ needs.workflows.result }}
+    steps:
+      - name: Check required results
+        run: |
+          set -euo pipefail
+          test "$CHECKS" = success
+          for pair in "$TESTS_NEEDED:$TESTS" "$WORKFLOWS_NEEDED:$WORKFLOWS"; do
+            case "$pair" in
+              true:success|false:skipped) ;;
+              *) printf 'Required check did not pass: %s\n' "$pair" >&2; exit 1 ;;
+            esac
+          done

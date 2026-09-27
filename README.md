@@ -70,6 +70,8 @@ The [wiki](wiki/Home.md) contains the guides and reference:
 
 MIT. See [LICENSE](LICENSE).
 
+The AVX2 kernels include code adapted from Aklomp Base64 under BSD-2-Clause; see [third-party notices](THIRD_PARTY_NOTICES.md).
+
 ---
 
 <p align="center"><em>Narrow channel flows;<br>

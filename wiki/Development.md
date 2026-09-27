@@ -51,7 +51,7 @@ The release workflow builds two archives:
 - `b64z-VERSION-linux-x86-scalar.tar.gz`: Linux x86-64, compiled with `-Dcpu=x86_64`.
 - `b64z-VERSION-linux-x86-avx2.tar.gz`: Linux x86-64, compiled with `-Dcpu=haswell`. This requires a Haswell-compatible CPU; it does not fall back to scalar at runtime.
 
-Both use ReleaseFast and strip debug information. Each archive contains a directory with `custom-base64` and `LICENSE`. The packaging script unpacks the archive, checks the exact version, backend, optimization mode, and architecture, then runs all four CLI modes. Encoded bytes are compared with GNU `base64`; the decoded bytes must match the original binary input. These commands run with an empty environment except for `PATH`.
+Both use ReleaseFast and strip debug information. Each archive contains a directory with `custom-base64`, `LICENSE`, and `THIRD_PARTY_NOTICES.md`. The packaging script unpacks the archive, checks the exact version, backend, optimization mode, and architecture, then runs all four CLI modes. Encoded bytes are compared with GNU `base64`; the decoded bytes must match the original binary input. These commands run with an empty environment except for `PATH`.
 
 You can run the same archive checks locally on a compatible Linux x86-64 host:
 

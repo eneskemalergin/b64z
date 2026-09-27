@@ -8,6 +8,9 @@
 //!
 //! x86-64 builds with AVX2 use vector kernels; other builds use the scalar path. Both produce
 //! identical bytes and errors.
+//!
+//! The AVX2 kernels include Aklomp Base64 code under BSD-2-Clause. See
+//! `THIRD_PARTY_NOTICES.md` in the repository root for attribution and license terms.
 
 const std = @import("std");
 const builtin = @import("builtin");

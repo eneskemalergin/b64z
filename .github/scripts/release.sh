@@ -55,7 +55,7 @@ case "${1:-}" in
         trap 'rm -rf -- "$work"' EXIT
         zig build -Dtarget=x86_64-linux -Dcpu="$cpu" -Doptimize=ReleaseFast -Dstrip=true --prefix "$work/install"
         mkdir "$work/$name" "$work/unpacked"
-        cp "$work/install/bin/custom-base64" LICENSE "$work/$name/"
+        cp "$work/install/bin/custom-base64" LICENSE THIRD_PARTY_NOTICES.md "$work/$name/"
         tar -czf "$work/$name.tar.gz" -C "$work" "$name"
         tar -xzf "$work/$name.tar.gz" -C "$work/unpacked"
 

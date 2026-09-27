@@ -50,6 +50,8 @@ The benchmarks time complete commands, including startup, file reads, allocation
 
 ## Start
 
+For the Zig API, [add the `base64` module to your project](wiki/Library-Guide.md#add-as-a-dependency).
+
 Build from the repository root with Zig 0.16.0:
 
 ```sh

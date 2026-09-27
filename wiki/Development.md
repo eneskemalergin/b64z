@@ -7,7 +7,7 @@ Run the tests, understand CI, and prepare a tagged B64Z release.
 Use Zig 0.16.0. [Getting started](Getting-Started.md#run-the-tests) describes the suites and what they check. CI uses these exact Linux x86-64 targets:
 
 ```sh
-zig fmt --check build.zig src tests tools/wrappers/zig_std_base64.zig
+zig fmt --check build.zig build.zig.zon src tests tools/wrappers/zig_std_base64.zig
 zig build test -Dtarget=x86_64-linux -Dcpu=x86_64 --summary all
 zig build test -Dtarget=x86_64-linux -Dcpu=x86_64 -Doptimize=ReleaseFast -Dstrip=true --summary all
 zig build test -Dtarget=x86_64-linux -Dcpu=haswell --summary all
@@ -23,7 +23,7 @@ The `haswell` commands require a Haswell-compatible CPU with AVX2. The scalar te
 ```mermaid
 flowchart TD
     checks[Source checks] --> workflows[Workflow checks]
-    checks --> scalar[Scalar: Debug, ReleaseFast, archive]
+    checks --> scalar[Scalar: Debug, ReleaseFast, CLI archive, Zig package]
     checks --> avx2[AVX2: Debug, ReleaseFast, archive]
     checks --> result[CI result]
     workflows --> result
@@ -32,9 +32,9 @@ flowchart TD
     result -->|Release tags only| publish[Publish tested archives]
 ```
 
-- **Source checks** select jobs from the changed files, read the CLI version, require its changelog entry, lint shell scripts, and compile-check Python files.
+- **Source checks** select jobs from the changed files, read the package version, require its changelog entry, lint shell scripts, and compile-check Python files.
 - **Workflow checks** run actionlint for workflow syntax and zizmor for workflow security. They run when `.github/` changes, on manual runs, and for releases. Zizmor runs offline with its regular checks; it needs no security-report upload permission.
-- **Scalar and AVX2** each run Debug tests, stripped ReleaseFast tests, and a release archive smoke test. The scalar job checks Zig formatting once, using the compiler already installed for its tests. Both jobs finish even if one fails. The AVX2 job checks the runner's CPU before testing.
+- **Scalar and AVX2** each run Debug tests, stripped ReleaseFast tests, and a CLI archive smoke test. The scalar job also checks Zig formatting and the source package's exported module from an isolated consumer. Both jobs finish even if one fails. The AVX2 job checks the runner's CPU before testing.
 - **CI result** fails when a required job fails, is cancelled, or unexpectedly skips. This is the single check to require in branch protection. Repository settings must be configured separately.
 
 Documentation, logo, figure, and retained measurement changes skip compiled tests unless another changed file needs them. The source checks still run. Unknown or unavailable comparison commits cause a full run. Workflow changes, manual runs, and release tags run every check.
@@ -43,19 +43,27 @@ New commits cancel superseded ordinary CI runs. Tagged release runs are not canc
 
 CI does not run performance measurements, build the benchmark peers, or enforce coverage percentages or binary-size limits. Those checks would answer different questions from the codec and command tests. [Benchmarking](Benchmarking.md) describes the separate measurements and byte comparisons.
 
-## Release archives
+## Distribution files
 
-The release workflow builds two archives:
+The release workflow publishes three archives:
 
+- `b64z-VERSION-source.tar.gz`: the Zig package for API consumers. It contains exactly the eight files listed in `build.zig.zon`: build files, codec and CLI source, Zig tests, and license notices.
 - `b64z-VERSION-linux-x86-scalar.tar.gz`: Linux x86-64, compiled with `-Dcpu=x86_64`.
 - `b64z-VERSION-linux-x86-avx2.tar.gz`: Linux x86-64, compiled with `-Dcpu=haswell`. This requires a Haswell-compatible CPU; it does not fall back to scalar at runtime.
 
-Both use ReleaseFast and strip debug information. Each archive contains a directory with `custom-base64`, `LICENSE`, and `THIRD_PARTY_NOTICES.md`. The packaging script unpacks the archive, checks the exact version, backend, optimization mode, and architecture, then runs all four CLI modes. Encoded bytes are compared with GNU `base64`; the decoded bytes must match the original binary input. These commands run with an empty environment except for `PATH`.
+`zig build source` creates the source archive in `zig-out/`, using `build.zig.zon`'s explicit file list. Creating this archive requires `tar`. The included CLI source and tests keep the archive's build steps usable; an application that imports the `base64` module compiles only the code it needs. [Library guide](Library-Guide.md#add-as-a-dependency) shows the dependency setup.
+
+The two CLI archives use ReleaseFast and strip debug information. Each contains only a directory with `custom-base64`, `LICENSE`, and `THIRD_PARTY_NOTICES.md`. The packaging script unpacks the archive, checks the exact version, backend, optimization mode, and architecture, then runs all four CLI modes. Encoded bytes are compared with GNU `base64`; the decoded bytes must match the original binary input. These commands run with an empty environment except for `PATH`.
+
+Benchmarks, figures, generated data, peer tools, wiki pages, CI files, and caches are excluded from all three archives. They remain available in the repository for development and inspection.
+
+The source-package check fetches the archive from a temporary consumer directory, with a separate package cache, then builds and runs a program through `b.dependency("b64z").module("base64")`. Never run `zig fetch` or `zig build --fetch` against the live repository or a worktree. Zig 0.16 stages packages before applying `.paths` filters, so use the bounded archive with separate source, consumer, and cache directories. See the [Zig 0.16 release notes](https://ziglang.org/download/0.16.0/release-notes.html).
 
 You can run the same archive checks locally on a compatible Linux x86-64 host:
 
 ```sh
 release_dir=$(mktemp -d)
+bash .github/scripts/release.sh package source "$release_dir"
 bash .github/scripts/release.sh package scalar "$release_dir"
 bash .github/scripts/release.sh package avx2 "$release_dir"
 ```
@@ -64,12 +72,12 @@ The script refuses to replace an existing archive. It does not run the full Zig 
 
 ## Prepare a release
 
-The CLI's `VERSION` in `src/main.zig` is the release version. There is no second version file. Keep the README version badge and the matching entry in [CHANGELOG.md](https://github.com/eneskemalergin/b64z/blob/main/CHANGELOG.md) current when changing it.
+The `version` in `build.zig.zon` is the package and release version. `build.zig` passes it to the CLI at compile time. Keep the README version badge and the matching entry in [CHANGELOG.md](https://github.com/eneskemalergin/b64z/blob/main/CHANGELOG.md) current when changing it. Preserve the manifest's `fingerprint` across releases.
 
 1. Set the version, finish its changelog entry, and add the publication date. Use a heading such as `## [0.1.0] - YYYY-MM-DD`.
 1. Review and merge the changes after CI passes. Check the benchmark reports separately if the release changes measured behavior.
 1. Create and push the matching tag from that commit, for example `v0.1.0`.
-1. Inspect the release run and the two uploaded archives.
+1. Inspect the release run and the three uploaded archives.
 
 [Release](https://github.com/eneskemalergin/b64z/blob/main/.github/workflows/release.yml) accepts `vMAJOR.MINOR.PATCH` tags that exactly match the source version and have a nonempty changelog entry. It runs all CI jobs again on the tag, then publishes those same tested archives and the matching changelog text. Only the publishing job has `contents: write`; build and test jobs have read-only repository access. Checkout never retains credentials. The workflow does not overwrite an existing release.
 

@@ -15,7 +15,7 @@ on:
         default: false
     outputs:
       version:
-        description: Version declared by the CLI
+        description: Version declared by the package manifest
         value: ${{ jobs.checks.outputs.version }}
 
 permissions: {}
@@ -169,7 +169,7 @@ jobs:
 
       - name: Check Zig formatting
         if: matrix.backend == 'scalar'
-        run: zig fmt --check build.zig src tests tools/wrappers/zig_std_base64.zig
+        run: zig fmt --check build.zig build.zig.zon src tests tools/wrappers/zig_std_base64.zig
 
       - name: Test Debug
         run: zig build test -Dtarget=x86_64-linux -Dcpu="$CPU" --summary all
@@ -179,6 +179,10 @@ jobs:
 
       - name: Build and test release archive
         run: bash .github/scripts/release.sh package "$BACKEND" "$RUNNER_TEMP/release"
+
+      - name: Build and check Zig source package
+        if: matrix.backend == 'scalar'
+        run: bash .github/scripts/release.sh package source "$RUNNER_TEMP/release"
 
       - name: Retain tested release archive
         if: inputs.release

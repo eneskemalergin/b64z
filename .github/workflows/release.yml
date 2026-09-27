@@ -51,6 +51,7 @@ jobs:
           set -euo pipefail
           bash .github/scripts/release.sh notes "$TAG" > "$RUNNER_TEMP/release-notes.md"
           archives=(
+            "$RUNNER_TEMP/release/b64z-$VERSION-source.tar.gz"
             "$RUNNER_TEMP/release/b64z-$VERSION-linux-x86-scalar.tar.gz"
             "$RUNNER_TEMP/release/b64z-$VERSION-linux-x86-avx2.tar.gz"
           )

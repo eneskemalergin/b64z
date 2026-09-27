@@ -2,6 +2,30 @@
 
 Call B64Z with caller-owned buffers, or keep an `Encoder` or `Decoder` between input chunks.
 
+## Add as a dependency
+
+Use Zig 0.16.0. Copy the download URL for `b64z-VERSION-source.tar.gz` from the desired release. Run this in your application's directory, replacing `SOURCE_ARCHIVE_URL` with that URL:
+
+```sh
+zig fetch --save=b64z SOURCE_ARCHIVE_URL
+```
+
+Zig records the URL and package hash in your application's `build.zig.zon`. Use the source archive for package installation. Never pass a live checkout or `.` as the fetch input. The source archive contains the build files, Zig source and tests, and license notices; benchmarks, fixtures, peer tools, and build outputs stay in the repository.
+
+In your application's `build.zig`, use its existing `target`, `optimize`, and executable values:
+
+```zig
+const b64z = b.dependency("b64z", .{
+    .target = target,
+    .optimize = optimize,
+});
+exe.root_module.addImport("base64", b64z.module("base64"));
+```
+
+Your Zig code can now use `@import("base64")`. The consumer chooses the target and optimization mode. Importing this module does not build the CLI or run B64Z's tests. The [API reference](API.md) describes backend selection and every public call.
+
+## Run the examples
+
 Each example below is a complete Zig test file. Save the example you want as `example.zig` beside `build.zig`, then run it from the repository root:
 
 ```sh

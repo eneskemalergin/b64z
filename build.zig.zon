@@ -1,0 +1,18 @@
+.{
+    .name = .b64z,
+    .version = "0.1.0",
+    // Keep this package identity across releases.
+    .fingerprint = 0x9b77126336e408a3,
+    .minimum_zig_version = "0.16.0",
+    .dependencies = .{},
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src/base64.zig",
+        "src/main.zig",
+        "tests/test_base64.zig",
+        "tests/test_cli.zig",
+        "LICENSE",
+        "THIRD_PARTY_NOTICES.md",
+    },
+}

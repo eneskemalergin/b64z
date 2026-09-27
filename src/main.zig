@@ -52,7 +52,7 @@ pub fn main(init: std.process.Init.Minimal) !void {
     return stdout.flush();
 }
 
-const VERSION = "0.1.0";
+const VERSION = @import("build_options").version;
 const STREAM_INPUT_SIZE = 64 * 1024;
 const STREAM_OUTPUT_SIZE = 88 * 1024;
 

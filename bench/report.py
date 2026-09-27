@@ -1587,13 +1587,20 @@ def report_text(
         "",
         "## Terms",
         "",
-        "For B64Z, `memory` means the command reads the complete input into one buffer and converts it in place. `Streaming` means the command uses fixed input and output buffers. The benchmark method and input details are in the [benchmark README](../README.md).",
+        "For B64Z, `memory` means the command reads the complete input into one buffer and converts it in place. `Streaming` means the command uses fixed input and output buffers. The [benchmark method](../../wiki/Benchmarking.md) describes the inputs and measurements.",
         "",
         "`Peak RSS` is the per-sample maximum resident set size reported by Zebrac for the timed process. The table and ratios use the mean of those per-sample peaks. It includes the executable, runtime, file I/O buffers, codec state, and resident input or output allocations; it is not the size of one buffer. `RSS / B64Z` compares that process value with B64Z in the same mode and input case.",
         "",
-        "The size names refer to the raw case bytes: `tiny` = 256 B, `small` = 16 KiB, `medium` = 1 MiB, `large` = 8 MiB, and `huge` = 32 MiB. Decode modes read the corresponding padded Base64 file, which is larger than the raw case.",
+        "The nominal size names are `tiny` = 256 B, `small` = 16 KiB, `medium` = 1 MiB, `large` = 8 MiB, and `huge` = 32 MiB. For zlib cases, these name the array before compression; the binary file passed to the encoder is smaller. Decode modes read padded Base64 of the corresponding binary file.",
         "",
         "## Result",
+        "",
+        "> [!NOTE]",
+        "> **Peer settings and memory allocation**",
+        ">",
+        "> Peers retain the build and CPU dispatch settings described in [Benchmark tools](../../wiki/Benchmark-Tools.md), including AVX2 for the tools built to use it. The scalar target changes B64Z only.",
+        ">",
+        "> B64Z's memory modes convert in place and request Linux transparent huge pages for large buffers. Our peer memory adapters use separate input and output buffers; we did not add huge-page advice to them. The reported command time and peak RSS include these allocation differences, along with startup, file I/O, and codec work.",
         "",
         "B64Z is the 1.0x reference in each mode. Time and RSS ratios use the geometric mean of 25 input cases. Values above 1.0x mean that the tool took more time or used more RSS than B64Z.",
         "",
@@ -1614,7 +1621,7 @@ def report_text(
             "",
             "## Figures",
             "",
-            "The figures use the inputs and method described in the [benchmark README](../README.md).",
+            "The figures use the inputs and method described in [Benchmarking](../../wiki/Benchmarking.md).",
             "",
             "<p align=\"center\">",
             "  <picture>",
@@ -1646,11 +1653,11 @@ def report_text(
             "",
             "## Data",
             "",
-            "The case sizes, byte forms, and compression details are listed in the [benchmark README](../README.md).",
+            "The case sizes, byte forms, and compression details are listed in [Benchmarking](../../wiki/Benchmarking.md#input-sizes).",
             "",
             "## Tools and versions",
             "",
-            f"- **B64Z** (all four modes): `{metadata.get('b64z_version', 'unknown')}`; `zig -Dcpu={target.cpu} -Doptimize=ReleaseFast -Dstrip=true`.",
+            f"- **B64Z** (all four modes): `{metadata.get('b64z_version', 'unknown')}`; `zig build -Dcpu={target.cpu} -Doptimize=ReleaseFast -Dstrip=true`.",
         ]
     )
     for peer in PEERS:
@@ -1660,7 +1667,7 @@ def report_text(
     lines.extend(
         [
             "",
-            "Peer commands and their mode coverage are described in [Local Peer Tools](../../tools/tool.md).",
+            "Peer commands and their mode coverage are described in [Benchmark tools](../../wiki/Benchmark-Tools.md).",
             "",
         ]
     )

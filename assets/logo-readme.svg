@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="200" height="152" viewBox="0 0 200 152" role="img" aria-labelledby="title description">
+  <title id="title">B64Z</title>
+  <desc id="description">B64 in white and Z in Zig yellow, inside a dark rounded tile with a yellow outline.</desc>
+  <rect x="3" y="3" width="194" height="146" rx="32" fill="#151515" stroke="#F7A41D" stroke-width="3"/>
+  <text x="100" y="98" text-anchor="middle" font-family="ui-monospace, 'DejaVu Sans Mono', 'Liberation Mono', monospace" font-size="58" font-weight="700" textLength="156" lengthAdjust="spacingAndGlyphs" fill="#FFFFFF">B64<tspan fill="#F7A41D">Z</tspan></text>
+</svg>

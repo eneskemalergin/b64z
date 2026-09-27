@@ -122,21 +122,15 @@ def generate_benchmarks() -> None:
 
 
 def write_data_notes() -> None:
-    notes = """Local Base64 data cases
+    notes = """Generated Base64 data cases
 
-This directory is ignored by design. Run `python3 tools/base64_data.py generate`
-to recreate it.
+Run `python3 tools/base64_data.py generate` to recreate these files.
 
-`fixture/valid/` contains raw `.bin` inputs and exact unwrapped `.b64` outputs.
-`fixture/invalid/` contains encoded inputs and the expected B64Z error name in
-the matching `.error` file.
+`fixture/valid/` contains raw `.bin` inputs and exact unwrapped `.b64` outputs. `fixture/invalid/` contains encoded inputs and the expected B64Z error name in the matching `.error` file.
 
-`bench/general/` contains ordinary deterministic byte streams. `bench/mzml/`
-contains 32-bit and 64-bit little-endian float payloads and their zlib-compressed
-forms. The payloads are the bytes that an mzML `<binary>` element carries after
-optional zlib compression. They are not complete XML documents.
+`bench/general/` contains deterministic byte streams. `bench/mzml/` contains generated 32-bit and 64-bit little-endian float arrays and their zlib-compressed forms, before Base64 conversion. They are not complete XML documents or measured instrument data.
 
-The five benchmark sizes are 256 B, 16 KiB, 1 MiB, 8 MiB, and 32 MiB.
+The nominal sizes are tiny = 256 B, small = 16 KiB, medium = 1 MiB, large = 8 MiB, and huge = 32 MiB. For zlib files, the size names describe the array before compression.
 """
     write_bytes(DATA_ROOT / "README.txt", notes.encode())
 

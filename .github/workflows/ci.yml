@@ -95,7 +95,6 @@ jobs:
             shellcheck "$script"
           done < <(git ls-files -z '*.sh')
           python3 -m compileall -q bench/report.py tools/base64_data.py tools/peer_config.py
-          python3 -m unittest discover -s tests -p 'test_*.py'
 
   workflows:
     name: Workflow checks

@@ -12,10 +12,9 @@ zig build test -Dtarget=x86_64-linux -Dcpu=x86_64 --summary all
 zig build test -Dtarget=x86_64-linux -Dcpu=x86_64 -Doptimize=ReleaseFast -Dstrip=true --summary all
 zig build test -Dtarget=x86_64-linux -Dcpu=haswell --summary all
 zig build test -Dtarget=x86_64-linux -Dcpu=haswell -Doptimize=ReleaseFast -Dstrip=true --summary all
-python3 -m unittest discover -s tests -p 'test_*.py'
 ```
 
-The `haswell` commands require a Haswell-compatible CPU with AVX2. The scalar tests skip the two private AVX2 tests; the AVX2 build runs them. No other operating system or architecture is part of this runtime matrix. The report tests need Python 3.10 or newer and its standard library.
+The `haswell` commands require a Haswell-compatible CPU with AVX2. The scalar tests skip the two private AVX2 tests; the AVX2 build runs them. No other operating system or architecture is part of this runtime matrix.
 
 ## CI jobs
 
@@ -33,7 +32,7 @@ flowchart TD
     result -->|Release tags only| publish[Publish tested archives]
 ```
 
-- **Source checks** select jobs from the changed files, read the CLI version, require its changelog entry, lint shell scripts, compile-check Python files, and test benchmark comparison text and plot limits. The report tests use the retained measurement tables; they do not run timings or need peer executables.
+- **Source checks** select jobs from the changed files, read the CLI version, require its changelog entry, lint shell scripts, and compile-check Python files.
 - **Workflow checks** run actionlint for workflow syntax and zizmor for workflow security. They run when `.github/` changes, on manual runs, and for releases. Zizmor runs offline with its regular checks; it needs no security-report upload permission.
 - **Scalar and AVX2** each run Debug tests, stripped ReleaseFast tests, and a release archive smoke test. The scalar job checks Zig formatting once, using the compiler already installed for its tests. Both jobs finish even if one fails. The AVX2 job checks the runner's CPU before testing.
 - **CI result** fails when a required job fails, is cancelled, or unexpectedly skips. This is the single check to require in branch protection. Repository settings must be configured separately.

@@ -10,7 +10,7 @@ The library encodes and decodes caller-owned byte slices without allocating. It 
 - [Command line](Command-Line): choose a conversion mode, redirect output, and handle errors.
 - [Library guide](Library-Guide): encode, decode, convert in place, and reuse streaming buffers.
 - [API reference](API): look up function signatures, output capacity, and error behavior.
-- [Development](Development): run CI checks, test release archives, and prepare a release.
+- [Development](Development): find the source files, run tests, and contribute code or documentation.
 
 ## Read the benchmarks
 

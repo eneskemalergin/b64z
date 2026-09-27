@@ -16,5 +16,5 @@
 
 **Development**
 
-- [Tests, CI, and releases](Development)
+- [Contributing and tests](Development)
 - [Changelog](https://github.com/eneskemalergin/b64z/blob/main/CHANGELOG.md)

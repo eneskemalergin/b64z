@@ -47,11 +47,9 @@ These are buffer capacities, not a promised RSS limit. Resident memory also incl
 
 Encoding accepts arbitrary bytes and writes standard padded Base64 without line wrapping or a trailing newline. Decoding requires that exact format. It does not strip whitespace or accept URL-safe Base64. For example, `aGVsbG8=` is valid, but the same text followed by a newline is rejected.
 
-A successful conversion exits with status `0`. Invalid arguments, malformed Base64, or an I/O failure produce a nonzero exit status and a diagnostic on stderr. There is no `--raw` option: stdout already contains only the converted bytes.
+A successful conversion exits with status `0`. Invalid arguments, malformed Base64, or an I/O failure produce a nonzero exit status and a diagnostic on stderr.
 
 Streaming may write a valid prefix before a later error. Treat the entire output as incomplete after a failed command. Whole-input decode validates and converts before writing its result, but a later write failure can still leave partial output. Neither mode makes shell redirection all-or-nothing.
-
-The old `encode-one-shot` and `decode-one-shot` names are rejected. Use `encode-memory` and `decode-memory`.
 
 ## Version and CPU selection
 

@@ -38,15 +38,11 @@ For zlib cases, the size label describes the array before compression, not the s
 >
 > B64Z's memory modes convert in place and request Linux transparent huge pages for large buffers. Our peer memory adapters use separate input and output buffers; we did not add huge-page advice to them. The reported command time and peak RSS include these allocation differences, along with startup, file I/O, and codec work.
 
-Each row starts one command for one input. B64Z streaming rows pass `--chunk 8191` for encoding and `--chunk 4093` for decoding, so each 64 KiB read is converted in several `update` calls. Memory rows read the complete input into one buffer and convert it in place; they do not pass `--chunk`. Peer memory adapters use separate input and output buffers. The timed process includes startup, file reads, allocation, Base64 work, and standard-output writes. Zebrac runs 20 measured samples after 5 warmups with a 15,000 ms duration ceiling. The reports use the geometric mean of 25 cases and show the general huge-input result separately.
+Each row starts one command for one input. B64Z streaming rows pass `--chunk 8191` for encoding and `--chunk 4093` for decoding, so each 64 KiB read is converted in several `update` calls. Zebrac runs 20 measured samples after 5 warmups with a 15,000 ms duration ceiling. The reports use the geometric mean of 25 cases and show the general huge-input result separately.
 
 Byte checks run before timing. B64Z and every selected peer are compared with canonical padded Base64 bytes from Aklomp. Invalid-input checks apply only to B64Z because the selected peers accept different grammars.
 
 These pages describe named command lines and builds on one Linux x86-64 host. They do not claim library-only instruction speed, a ranking on another host, or a result for an unlisted adapter.
-
-The target choice changes the B64Z build only. Peer binaries keep their own native build and runtime dispatch settings. The scalar page therefore compares B64Z scalar code with those peer builds; it is not a scalar-for-every-peer instruction-set test.
-
-A measurement or report-writing run refuses a worktree with project changes. Generated benchmark pages do not count as project changes, so the AVX2 and scalar pages can be measured in separate runs from the same commit.
 
 ## Read the figures
 
@@ -69,7 +65,9 @@ bash bench/linux-x86-scalar/run.sh
 
 The scripts require Linux x86-64, Zig 0.16.0, Python 3.10 or newer, the selected peer executables, Zebrac with access to Linux performance counters, and gnuplot. [Benchmark tools](Benchmark-Tools) lists peer builds, adapters, and byte-check commands. The runner builds B64Z, not the peers.
 
-A publication run uses the default sample policy and byte checks. `--skip-benchmarks --skip-report` builds the selected B64Z target and runs byte checks without Zebrac or gnuplot. The file cache is warm after verification; the runner does not pin a CPU or flush the page cache.
+A full run uses the default sample policy and byte checks. `--skip-benchmarks --skip-report` builds the selected B64Z target and runs byte checks without Zebrac or gnuplot. The file cache is warm after verification; the runner does not pin a CPU or flush the page cache.
+
+Measurement and report-writing runs require a clean worktree. Generated benchmark pages are excluded from this check, so both targets can be measured from the same source commit.
 
 New runs record Linux transparent huge-page `enabled` and `defrag` settings and the PMD huge-page size in bytes. Square brackets mark the active setting; these values describe kernel policy, not the pages allocated to an individual process. A setting that cannot be read is reported as `unavailable`.
 
@@ -82,9 +80,7 @@ New runs record Linux transparent huge-page `enabled` and `defrag` settings and 
 - `figures/isocost-light.svg` and `figures/isocost-dark.svg` show one dot per input case, geometric means, peak-RSS ratios to B64Z, and combined-cost curves.
 - `figures/summary-light.svg` and `figures/summary-dark.svg` in the AVX2 report show the summary used by the main README.
 
-The pages cover all 100 mode-and-case groups without creating one public page per input.
-
-To redraw only the figures from the retained measurements, including while editing the plot styles, run:
+To redraw the figures from the retained measurements, run:
 
 ```sh
 python3 bench/report.py render --target linux-x86-avx2 --figures-only

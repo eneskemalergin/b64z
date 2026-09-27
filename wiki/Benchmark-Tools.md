@@ -164,20 +164,9 @@ bash bench/linux-x86-scalar/run.sh --skip-benchmarks --skip-report
 
 The generator creates valid and invalid fixtures and benchmark inputs. Each target command builds B64Z, then checks all B64Z modes, invalid-input errors, Aklomp, and every selected peer against the benchmark inputs without running timings.
 
-The peer commands write directly to redirected stdout. The verifier passes argument arrays and compares output files byte for byte; it does not use shell pipelines, hashes, or text conversion.
+The verifier compares output files byte for byte before timing. When changing a peer build or adapter, record its version and build flags, use its release configuration, and rerun these checks. Each timed command must read `INPUT` directly, write only converted bytes to stdout, and send diagnostics to stderr. Keep shell pipelines and compression outside the timed command.
 
-## Build and qualification rules
-
-1. Record the upstream version or commit before compiling.
-1. Build ReleaseFast or the upstream release configuration. Do not time Debug binaries.
-1. Use direct file arguments. Do not run `cat`, `dd`, shell substitutions, compression, decompression, or a second process in the timed command.
-1. Write raw output directly to stdout. The peer runner redirects stdout to its comparison file.
-1. Keep diagnostics on stderr and keep normal stdout byte-clean.
-1. Qualify encode and decode bytes against canonical valid inputs before measuring speed.
-1. Run the same benchmark input through every peer selected for that mode. The measurement table records case IDs, byte counts, and command arguments, using `INPUT` in place of the file path. The report names source versions, build settings, and host tools; this page explains the accepted-input differences.
-1. Do not compare a peer's malformed-input behavior as a speed row unless its accepted grammar is the same as B64Z's grammar.
-
-The benchmark runner is the only peer byte verifier; external tools stay outside the Zig test executables. [Benchmarking](Benchmarking#run) describes the timing commands and report files.
+Use the same valid input cases for every selected peer. Their malformed-input rules differ, so invalid-input checks apply only to B64Z. [Benchmarking](Benchmarking#run) describes the timing commands and report files.
 
 ## Excluded from the default peer set
 

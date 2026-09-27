@@ -98,4 +98,4 @@ Decoder calls return `error.InvalidCharacter` or `error.InvalidPadding` when the
 
 The build selects the backend at compile time. x86-64 builds with AVX2 use the AVX2 block functions; other builds use the scalar functions. The public function names, output bytes, errors, padding rules, and stateful buffer rules do not change with the selected backend. An AVX2 binary does not fall back to scalar on a CPU without AVX2.
 
-See [Getting started](Getting-Started#run-the-tests) for the test commands and [Command line](Command-Line) for the file converter's modes and options.
+See [Development](Development#run-the-tests) for the test commands and [Command line](Command-Line) for the file converter's modes and options.

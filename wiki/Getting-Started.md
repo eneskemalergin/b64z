@@ -4,6 +4,16 @@ Build `custom-base64` from the repository root with Zig 0.16.0.
 
 The codec and command need no third-party runtime library. The commands below use a POSIX shell and describe the tested Linux x86-64 build.
 
+## Choose an archive
+
+When using a packaged version, choose the archive for your use:
+
+- `b64z-VERSION-source.tar.gz`: Zig source for the [library API](Library-Guide#add-as-a-dependency).
+- `b64z-VERSION-linux-x86-scalar.tar.gz`: command-line executable for Linux x86-64.
+- `b64z-VERSION-linux-x86-avx2.tar.gz`: command-line executable for Linux x86-64 with a Haswell-compatible CPU and AVX2. It does not fall back to scalar on older CPUs.
+
+`VERSION` is the package version. Each CLI archive contains `custom-base64` and the license notices; running that executable does not require Zig. To build from a checkout, use the commands below.
+
 ## Build for this machine
 
 ```sh
@@ -38,15 +48,4 @@ cmp hello.bin hello.decoded
 
 Read [Command line](Command-Line) for the four modes, `--chunk`, and partial-output behavior. Read [Library guide](Library-Guide) to call the codec from Zig.
 
-## Run the tests
-
-```sh
-zig build test -Dcpu=native --summary all
-zig build test -Dcpu=native -Doptimize=ReleaseFast --summary all
-zig build test -Dcpu=x86_64 --summary all
-zig build test -Dcpu=x86_64 -Doptimize=ReleaseFast --summary all
-```
-
-The test step runs the public codec tests, private AVX2 kernel tests, and CLI tests. The two private kernel tests are skipped when the selected CPU has no AVX2. Each CLI test runs the executable built for that test command, not a previously installed binary.
-
-The tests cover exact bytes, malformed input, short buffers, overlap, in-place conversion, chunk boundaries, and CLI output and errors. Passing them on one host does not establish runtime behavior on other systems. No peer tools or benchmark inputs are needed to run these tests.
+For source changes, see [Development](Development#run-the-tests) for the test commands.

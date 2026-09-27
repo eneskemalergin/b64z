@@ -4,13 +4,19 @@ Call B64Z with caller-owned buffers, or keep an `Encoder` or `Decoder` between i
 
 ## Add as a dependency
 
-Use Zig 0.16.0. Copy the download URL for `b64z-VERSION-source.tar.gz` from the desired release. Run this in your application's directory, replacing `SOURCE_ARCHIVE_URL` with that URL:
+Use Zig 0.16.0 and the `b64z-VERSION-source.tar.gz` package. To create it from a B64Z checkout, run:
 
 ```sh
-zig fetch --save=b64z SOURCE_ARCHIVE_URL
+zig build source
 ```
 
-Zig records the URL and package hash in your application's `build.zig.zon`. Use the source archive for package installation. Never pass a live checkout or `.` as the fetch input. The source archive contains the build files, Zig source and tests, and license notices; benchmarks, fixtures, peer tools, and build outputs stay in the repository.
+This requires `tar` and writes the archive to `zig-out/`. In your application's directory, replace `SOURCE_ARCHIVE` with the archive's absolute path, or with the download URL of a published source archive:
+
+```sh
+zig fetch --save=b64z SOURCE_ARCHIVE
+```
+
+Zig records the package in your application's `build.zig.zon`. Fetch only the archive. Never pass a live checkout or `.` as the fetch input. The package contains the build files, Zig source and tests, and license notices; benchmarks, peer tools, and generated data stay in the repository.
 
 In your application's `build.zig`, use its existing `target`, `optimize`, and executable values:
 
@@ -26,7 +32,7 @@ Your Zig code can now use `@import("base64")`. The consumer chooses the target a
 
 ## Run the examples
 
-Each example below is a complete Zig test file. Save the example you want as `example.zig` beside `build.zig`, then run it from the repository root:
+Each example below is a complete Zig test file. In a B64Z checkout, save the example as `example.zig` beside `build.zig`, then run:
 
 ```sh
 zig test --dep base64 -Mroot=example.zig -Mbase64=src/base64.zig

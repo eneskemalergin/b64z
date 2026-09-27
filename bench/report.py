@@ -646,11 +646,18 @@ def environment_metadata(
                 break
     except OSError:
         pass
-    governor_path = Path("/sys/devices/system/cpu/cpu0/cpufreq/scaling_governor")
-    try:
-        governor = governor_path.read_text(encoding="utf-8").strip()
-    except OSError:
-        governor = "unknown"
+    thp = Path("/sys/kernel/mm/transparent_hugepage")
+    settings = {}
+    for key, path in (
+        ("cpu_governor", Path("/sys/devices/system/cpu/cpu0/cpufreq/scaling_governor")),
+        ("thp_enabled", thp / "enabled"),
+        ("thp_defrag", thp / "defrag"),
+        ("thp_pmd_size_bytes", thp / "hpage_pmd_size"),
+    ):
+        try:
+            settings[key] = path.read_text(encoding="utf-8").strip()
+        except OSError:
+            settings[key] = "unavailable"
     return {
         "generated_utc": generated_utc,
         "target": target.id,
@@ -669,7 +676,7 @@ def environment_metadata(
         "architecture": platform.machine(),
         "cpu_model": model,
         "cpu_count": str(os.cpu_count() or "unknown"),
-        "cpu_governor": governor,
+        **settings,
         "git_commit": git_value(["rev-parse", "HEAD"]),
         "git_changes": "yes" if git_has_changes() else "no",
         "input_preparation": preparation,
@@ -1552,6 +1559,13 @@ def report_text(
         if control_time
         else "The report has no B64Z A/A control measurement."
     )
+    thp_line = "- Transparent huge-page settings were not recorded for this run."
+    if "thp_enabled" in metadata:
+        thp_line = (
+            f"- Transparent huge pages: enabled `{metadata['thp_enabled']}`; "
+            f"defrag `{metadata.get('thp_defrag', 'not recorded')}`; "
+            f"PMD page size (bytes): `{metadata.get('thp_pmd_size_bytes', 'not recorded')}`."
+        )
     result_headers = [
         "Mode",
         "Tool",
@@ -1678,6 +1692,7 @@ def report_text(
             "",
             f"- Host: `{metadata.get('cpu_model', 'unknown')}`, `{metadata.get('architecture', 'unknown')}`, `{metadata.get('cpu_count', 'unknown')} logical CPUs`.",
             f"- Kernel: `{metadata.get('kernel', 'unknown')}`; CPU governor: `{metadata.get('cpu_governor', 'unknown')}`.",
+            thp_line,
             f"- Git commit: `{metadata.get('git_commit', 'unknown')}`; project changes at measurement time: `{metadata.get('git_changes', 'unknown')}`.",
             f"- Runner: `{metadata.get('zebrac_version', 'unknown')}`; gnuplot: `{metadata.get('gnuplot_version', 'unknown')}`; Zig: `{metadata.get('zig_version', 'unknown')}`.",
             f"- Host tools: GCC `{metadata.get('gcc_version', 'unknown')}`; Clang `{metadata.get('clang_version', 'unknown')}`; Rust `{metadata.get('rustc_version', 'unknown')}`; Cargo `{metadata.get('cargo_version', 'unknown')}`; CMake `{metadata.get('cmake_version', 'unknown')}`; Make `{metadata.get('make_version', 'unknown')}`.",

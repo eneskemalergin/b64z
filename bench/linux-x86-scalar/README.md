@@ -108,6 +108,7 @@ Peer commands and their mode coverage are described in [Benchmark tools](../../w
 
 - Host: `AMD Ryzen 9 3950X 16-Core Processor`, `x86_64`, `32 logical CPUs`.
 - Kernel: `7.2.5-200.fc44.x86_64`; CPU governor: `schedutil`.
+- Transparent huge-page settings were not recorded for this run.
 - Git commit: `3309e5b8a7b27b359bc3fed8f6524ea0a7d6a79b`; project changes at measurement time: `no`.
 - Runner: `zebrac 0.6.2`; gnuplot: `gnuplot 6.0.3 patchlevel 3`; Zig: `0.16.0`.
 - Host tools: GCC `gcc (GCC) 16.2.1 20260819 (Red Hat 16.2.1-2)`; Clang `clang version 22.1.8 (Fedora 22.1.8-4.fc44)`; Rust `rustc 1.98.0 (88d9e12ae 2026-08-18)`; Cargo `cargo 1.98.0 (797e8a9bc 2026-08-05)`; CMake `cmake version 4.3.0`; Make `GNU Make 4.4.1`.

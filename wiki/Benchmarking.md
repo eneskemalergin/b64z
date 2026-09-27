@@ -9,7 +9,7 @@ Each target page contains its result table, light and dark SVG figures, per-comm
 
 ## Status of these results
 
-The retained pages were generated on 2026-09-23 from source commit `3309e5b8a7b27b359bc3fed8f6524ea0a7d6a79b`; both record `git_changes=no`. They include the current AVX2 kernels, in-place memory modes, and streaming decoder.
+The retained pages were generated on 2026-09-23 from source commit `3309e5b8a7b27b359bc3fed8f6524ea0a7d6a79b`; both record `git_changes=no`. They include the current AVX2 kernels, in-place memory modes, and streaming decoder. Transparent huge-page settings were not recorded for these runs.
 
 The Aklomp executable in both pages was built with `AVX2_CFLAGS=-mavx2`; upstream runtime dispatch selects AVX2 on this host. The scalar page compares B64Z's scalar build with peers using their native build and runtime dispatch settings.
 
@@ -70,6 +70,8 @@ bash bench/linux-x86-scalar/run.sh
 The scripts require Linux x86-64, Zig 0.16.0, Python 3.10 or newer, the selected peer executables, Zebrac with access to Linux performance counters, and gnuplot. [Benchmark tools](Benchmark-Tools.md) lists peer builds, adapters, and byte-check commands. The runner builds B64Z, not the peers.
 
 A publication run uses the default sample policy and byte checks. `--skip-benchmarks --skip-report` builds the selected B64Z target and runs byte checks without Zebrac or gnuplot. The file cache is warm after verification; the runner does not pin a CPU or flush the page cache.
+
+New runs record Linux transparent huge-page `enabled` and `defrag` settings and the PMD huge-page size in bytes. Square brackets mark the active setting; these values describe kernel policy, not the pages allocated to an individual process. A setting that cannot be read is reported as `unavailable`.
 
 ## Result files
 

@@ -39,6 +39,7 @@ MODES = (
     "decode-streaming",
 )
 SIZE_NAMES = ("tiny", "small", "medium", "large", "huge")
+SIZE_BYTES = (256, 16 * 1024, 1024**2, 8 * 1024**2, 32 * 1024**2)
 CHUNKS = {
     "encode-streaming": 8191,
     "decode-streaming": 4093,
@@ -56,40 +57,38 @@ DEFAULT_DURATION_MS = 15000
 PLOT_THEMES = {
     "light": {
         "background": "#FFFFFF",
-        "foreground": "#111827",
-        "muted": "#4B5563",
-        "grid": "#E5E7EB",
-        "reference": "#94A3B8",
-        "curve": "#A8B2C0",
-        "curve_label": "#64748B",
+        "foreground": "#202B38",
+        "muted": "#526171",
+        "grid": "#E5EAF0",
+        "reference": "#8693A1",
+        "curve": "#B5BFC9",
         "colors": {
-            "b64z": "#E69F00",
+            "b64z": "#996515",
             "aklomp": "#0072B2",
-            "coreutils": "#4D4D4D",
-            "simdutf": "#009E73",
-            "turbo": "#D55E00",
-            "rust-base64": "#CC79A7",
-            "rust-simd": "#0077B6",
-            "zig-std": "#6A3D9A",
+            "coreutils": "#52606D",
+            "simdutf": "#007B65",
+            "turbo": "#C34B24",
+            "rust-base64": "#A64C79",
+            "rust-simd": "#007C91",
+            "zig-std": "#7551A4",
         },
     },
     "dark": {
-        "background": "#111827",
-        "foreground": "#F3F4F6",
-        "muted": "#CBD5E1",
-        "grid": "#374151",
-        "reference": "#64748B",
-        "curve": "#64748B",
-        "curve_label": "#CBD5E1",
+        "background": "#101820",
+        "foreground": "#E8EDF2",
+        "muted": "#ADBCCA",
+        "grid": "#283540",
+        "reference": "#778A9B",
+        "curve": "#4C606F",
         "colors": {
-            "b64z": "#F2B134",
+            "b64z": "#F2C05A",
             "aklomp": "#56B4E9",
-            "coreutils": "#D1D5DB",
-            "simdutf": "#66C2A5",
-            "turbo": "#F26F5B",
-            "rust-base64": "#E8A8C8",
-            "rust-simd": "#7DD3FC",
-            "zig-std": "#C084FC",
+            "coreutils": "#B7C4D2",
+            "simdutf": "#5DC6A5",
+            "turbo": "#F38B72",
+            "rust-base64": "#E6A0C4",
+            "rust-simd": "#60C8DE",
+            "zig-std": "#BCA3EA",
         },
     },
 }
@@ -98,9 +97,9 @@ MARKERS = {
     "aklomp": 5,
     "coreutils": 13,
     "simdutf": 9,
-    "turbo": 12,
-    "rust-base64": 8,
-    "rust-simd": 10,
+    "turbo": 11,
+    "rust-base64": 4,
+    "rust-simd": 12,
     "zig-std": 6,
 }
 DASHES = {
@@ -113,10 +112,9 @@ DASHES = {
     "rust-simd": 7,
     "zig-std": 8,
 }
-COST_LEVELS = (1.0, 1.25, 1.5, 2.0, 3.0)
+COST_LEVELS = (1.0, 2.0, 4.0, 8.0, 16.0)
 GNUPLOT_PLOT_SEPARATOR = ", " + chr(92) + "\n    "
-SUMMARY_BAR_STEP = 0.13
-SUMMARY_BAR_HALF_HEIGHT = 0.045
+RATIO_TICS = "('0.25' 0.25, '0.5' 0.5, '1' 1, '2' 2, '4' 4, '8' 8, '16' 16, '32' 32)"
 
 
 class BenchmarkError(RuntimeError):
@@ -330,7 +328,7 @@ def build_target(arguments: argparse.Namespace) -> None:
         "--prefix",
         str(target.directory),
     ]
-    print(f"building {target.id} with zig -Dcpu={target.cpu} -Doptimize=ReleaseFast -Dstrip=true")
+    print(f"building {target.id} with zig build -Dcpu={target.cpu} -Doptimize=ReleaseFast -Dstrip=true")
     result = run_command(command)
     if result.returncode != 0:
         raise BenchmarkError(
@@ -983,7 +981,8 @@ def write_summary(path: Path, summary: list[dict[str, object]]) -> None:
 
 
 def title_for_mode(mode: str) -> str:
-    return mode.replace("-", " ").title()
+    operation, storage = mode.split("-")
+    return f"{operation.title()} / {storage}"
 
 
 def gnuplot_quote(value: str | Path) -> str:
@@ -1013,7 +1012,10 @@ def run_gnuplot(script: str) -> None:
 
 
 def normalize_svg(path: Path) -> None:
-    lines = [line.rstrip() for line in path.read_text(encoding="utf-8").splitlines()]
+    title = f"B64Z {path.parents[1].name.removeprefix('linux-x86-').upper()}: {path.stem.replace('-', ' ')}"
+    svg = path.read_text(encoding="utf-8").replace("<title>Gnuplot</title>", f"<title>{title}</title>")
+    svg = svg.replace('font-family="DejaVu Sans"', 'font-family="DejaVu Sans,Arial,sans-serif"')
+    lines = [line.rstrip() for line in svg.splitlines()]
     while lines and not lines[-1]:
         lines.pop()
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
@@ -1023,22 +1025,63 @@ def terminal_script(
     output: Path,
     body: str,
     theme_name: str,
-    size: tuple[int, int] = (1800, 1100),
+    size: tuple[int, int] = (1280, 1000),
 ) -> str:
     svg = output.with_suffix(".svg")
     theme = PLOT_THEMES[theme_name]
     return f"""
 set encoding utf8
-set terminal svg size {size[0]},{size[1]} dynamic enhanced font "DejaVu Sans,16" background rgb {gnuplot_quote(theme['background'])}
+set terminal svg size {size[0]},{size[1]} dynamic enhanced font "DejaVu Sans,18" rounded background rgb {gnuplot_quote(theme['background'])}
 set output {gnuplot_quote(svg)}
-set border lc rgb {gnuplot_quote(theme['foreground'])}
-set tics textcolor rgb {gnuplot_quote(theme['foreground'])}
+set border 3 lw 1 lc rgb {gnuplot_quote(theme['reference'])}
+set tics out nomirror scale 0.4 font ',16' textcolor rgb {gnuplot_quote(theme['muted'])}
+unset mxtics
+unset mytics
+set grid back xtics ytics lc rgb {gnuplot_quote(theme['grid'])} lw 1 dt 1
+set bars 0.5
+set key noopaque nobox reverse Left samplen 1.8 spacing 1.4 font ',16' textcolor rgb {gnuplot_quote(theme['foreground'])}
+set style textbox opaque noborder fillcolor rgb {gnuplot_quote(theme['background'])} margins 0.3,0.2
 set title textcolor rgb {gnuplot_quote(theme['foreground'])}
 set xlabel textcolor rgb {gnuplot_quote(theme['foreground'])}
 set ylabel textcolor rgb {gnuplot_quote(theme['foreground'])}
 {body}
 set output
 """
+
+
+def series_style(tool: str, theme_name: str, dashed: bool = False) -> str:
+    color = PLOT_THEMES[theme_name]["colors"][tool]
+    return f"lc rgb '{color}' lw 2.2 dt {DASHES[tool] if dashed else 1} pt {MARKERS[tool]} ps 1.0"
+
+
+def figure_header(title: str, subtitle: str, footer: str, theme_name: str) -> str:
+    theme = PLOT_THEMES[theme_name]
+    return f"""
+set label 100 {gnuplot_quote(title)} at screen 0.075,0.965 left font 'DejaVu Sans,26' tc rgb '{theme['foreground']}'
+set label 101 {gnuplot_quote(subtitle)} at screen 0.075,0.924 left font ',16' tc rgb '{theme['muted']}'
+set label 102 {gnuplot_quote(footer)} at screen 0.075,0.026 left font ',14' tc rgb '{theme['muted']}'
+"""
+
+
+def panel_plot(panel: int, mode: str, plots: list[str], theme_name: str, style: str) -> str:
+    theme = PLOT_THEMES[theme_name]
+    if panel == 0:
+        for tool in ("b64z", *(peer.id for peer in PEERS)):
+            label = "B64Z" if tool == "b64z" else PEER_BY_ID[tool].label
+            plots.append(f"keyentry with {style} {series_style(tool, theme_name, style == 'linespoints')} title {gnuplot_quote(label)}")
+    return f"""
+set label 300 {gnuplot_quote(f'({chr(97 + panel)})  {title_for_mode(mode)}')} at graph 0,1.08 left font ',18' tc rgb '{theme['foreground']}'
+{'set key at screen 0.52,0.858 center horizontal columns 4 keywidth screen 0.86' if panel == 0 else 'unset key'}
+plot {GNUPLOT_PLOT_SEPARATOR.join(plots)}
+unset label 100
+unset label 101
+unset label 102
+"""
+
+
+def ratio_range(values: Iterable[float]) -> tuple[float, float]:
+    values = [1.0, *values]
+    return min(values) / 1.2, max(values) * 1.2
 
 
 def write_scaling_data(
@@ -1051,7 +1094,7 @@ def write_scaling_data(
         for tool in tools:
             path = directory / f"scaling-{mode}-{tool}.dat"
             with path.open("w", encoding="utf-8") as output:
-                for index, size in enumerate(SIZE_NAMES, start=1):
+                for size, nominal_bytes in zip(SIZE_NAMES, SIZE_BYTES, strict=True):
                     values = [
                         row
                         for row in rows
@@ -1077,56 +1120,45 @@ def write_scaling_data(
                             / (1024.0**3)
                         )
                     output.write(
-                        f"{index}\t{fmt_number(geometric_mean(throughput))}\n"
+                        f"{nominal_bytes}\t{fmt_number(geometric_mean(throughput))}\n"
                     )
             paths[(mode, tool)] = path
     return paths
+
+
+def summary_positions() -> dict[tuple[str, str], float]:
+    positions = {}
+    y = 0.0
+    for mode in MODES:
+        for peer in PEERS:
+            if mode in peer.modes:
+                positions[(mode, peer.id)] = y
+                y -= 1
+        y -= 1.4
+    return positions
 
 
 def write_summary_data(
     summary: list[dict[str, object]], directory: Path
 ) -> dict[tuple[str, str], Path]:
     directory.mkdir(parents=True, exist_ok=True)
-    summary_by_key = {
-        (str(row["mode"]), str(row["tool"])): row for row in summary
-    }
-    positions: dict[tuple[str, str], float] = {}
-    for mode_number, mode in enumerate(MODES, start=1):
-        tools = ["b64z", *(peer.id for peer in PEERS if mode in peer.modes)]
-        center = len(MODES) - mode_number + 1
-        for tool_number, tool in enumerate(tools):
-            offset = (tool_number - (len(tools) - 1) / 2) * SUMMARY_BAR_STEP
-            positions[(mode, tool)] = center + offset
-    paths: dict[tuple[str, str], Path] = {}
-    tools = [peer.id for peer in PEERS]
+    positions = summary_positions()
+    paths = {}
     for metric in ("time", "rss"):
-        for tool in tools:
-            path = directory / f"summary-{metric}-{tool}.dat"
-            with path.open("w", encoding="utf-8") as output:
-                for mode in MODES:
-                    row = summary_by_key.get((mode, tool))
-                    if row is None:
-                        continue
-                    y = positions[(mode, tool)]
-                    mean = float(row[f"{metric}_ratio"])
-                    bar_low = min(1.0, mean)
-                    bar_high = max(1.0, mean)
-                    output.write(
-                        "\t".join(
-                            [
-                                fmt_number(mean),
-                                fmt_number(y),
-                                fmt_number(bar_low),
-                                fmt_number(bar_high),
-                                fmt_number(y - SUMMARY_BAR_HALF_HEIGHT),
-                                fmt_number(y + SUMMARY_BAR_HALF_HEIGHT),
-                                fmt_number(float(row[f"{metric}_iqr_low"])),
-                                fmt_number(float(row[f"{metric}_iqr_high"])),
-                            ]
-                        )
-                        + "\n"
+        for peer in PEERS:
+            path = directory / f"summary-{metric}-{peer.id}.dat"
+            lines = []
+            for row in summary:
+                if row["tool"] == peer.id:
+                    values = (
+                        float(row[f"{metric}_ratio"]),
+                        positions[(str(row["mode"]), peer.id)],
+                        float(row[f"{metric}_iqr_low"]),
+                        float(row[f"{metric}_iqr_high"]),
                     )
-            paths[(metric, tool)] = path
+                    lines.append("\t".join(fmt_number(value) for value in values))
+            path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+            paths[(metric, peer.id)] = path
     return paths
 
 
@@ -1137,122 +1169,110 @@ def summary_body(
     theme_name: str,
 ) -> str:
     theme = PLOT_THEMES[theme_name]
-    colors = theme["colors"]
-    tools = [peer.id for peer in PEERS]
-    metric_ranges: dict[str, tuple[float, float]] = {}
-    for metric in ("time", "rss"):
-        values = [
-            float(row[field])
-            for row in summary
-            for field in (
-                f"{metric}_ratio",
-                f"{metric}_iqr_low",
-                f"{metric}_iqr_high",
-            )
-        ]
-        metric_ranges[metric] = (
-            max(0.5, min(0.9, min(values) * 0.95)),
-            max(1.2, max(values) * 1.10),
-        )
-
-    panels: list[str] = []
+    positions = summary_positions()
+    x_low, x_high = ratio_range(
+        float(row[f"{metric}_{field}"])
+        for row in summary
+        for metric in ("time", "rss")
+        for field in ("ratio", "iqr_low", "iqr_high")
+    )
+    ytics = ", ".join(
+        f"{gnuplot_quote(PEER_BY_ID[tool].label)} {y:g}"
+        for (_, tool), y in positions.items()
+    )
+    panels = []
     for panel, (metric, title) in enumerate(
         (("time", "Wall time / B64Z"), ("rss", "Peak RSS / B64Z"))
     ):
-        x_low, x_high = metric_ranges[metric]
-        plots = []
-        for tool in tools:
-            plots.append(
-                f"{gnuplot_quote(data_paths[(metric, tool)])} using 1:2:3:4:5:6 with boxxyerror "
-                f"fs solid 0.78 fc rgb {gnuplot_quote(colors[tool])} "
-                + (
-                    f"title {gnuplot_quote(PEER_BY_ID[tool].label)}"
-                    if panel == 0
-                    else "notitle"
+        labels, plots = [], []
+        if panel == 0:
+            for index, mode in enumerate(MODES):
+                y = max(y for (row_mode, _), y in positions.items() if row_mode == mode)
+                labels.append(
+                    f"set label {200 + index} {gnuplot_quote(title_for_mode(mode))} "
+                    f"at screen 0.035, first {y + 0.85:g} left font ',16' tc rgb '{theme['foreground']}'"
                 )
-            )
+        for peer in PEERS:
+            data = gnuplot_quote(data_paths[(metric, peer.id)])
             plots.append(
-                f"{gnuplot_quote(data_paths[(metric, tool)])} using 1:2:7:8 with xerrorbars "
-                f"lw 1.5 pt 0 lc rgb {gnuplot_quote(theme['foreground'])} notitle"
+                f"{data} using 1:2:3:4 with xerrorbars {series_style(peer.id, theme_name)} notitle"
             )
-        panel_title_id = 300 + panel
-        panels.append(
-            "unset title\n"
-            + f"set label {panel_title_id} {gnuplot_quote(title)} "
-            + f"at screen {0.28 + panel * 0.44},{0.825} center font ',17' "
-            + f"textcolor rgb {gnuplot_quote(theme['foreground'])} front\n"
-            + "set xlabel 'ratio to B64Z (log scale; lower is better)'\n"
-            + f"set ylabel {gnuplot_quote('Mode' if panel == 0 else '')}\n"
-            + f"set xrange [{fmt_number(x_low)}:{fmt_number(x_high)}]\n"
-            + "set yrange [0.5:4.5]\n"
-            + "set logscale x\n"
-            + "set format x '%.1f'\n"
-            + "set ytics ('encode-memory' 4, 'encode-streaming' 3, 'decode-memory' 2, 'decode-streaming' 1) font ',12'\n"
-            + ("unset ytics\n" if panel == 1 else "")
-            + f"set grid xtics ytics lc rgb {gnuplot_quote(theme['grid'])} lw 1\n"
-            + f"set bars 0.55\n"
-            + f"set arrow 90 from 1, graph 0 to 1, graph 1 nohead dt 1 lc rgb {gnuplot_quote(colors['b64z'])} lw 2.8 front\n"
-            + (
-                f"set key at screen 0.5,0.895 center noopaque nobox font ',11' textcolor rgb {gnuplot_quote(theme['foreground'])} samplen 1.4 spacing 1.0 horizontal maxcols 4\n"
-                if panel == 0
-                else "unset key\n"
-            )
-            + "plot "
-            + GNUPLOT_PLOT_SEPARATOR.join(plots)
-            + f"\nunset label {panel_title_id}\n"
-        )
-    backend = target.backend.upper()
+        for index, row in enumerate(summary):
+            if row["tool"] != "b64z":
+                y = positions[(str(row["mode"]), str(row["tool"]))]
+                labels.append(
+                    f"set label {400 + index} '{float(row[f'{metric}_ratio']):.2f}x' "
+                    f"at graph 1.03, first {y:g} left font ',15' tc rgb '{theme['foreground']}'"
+                )
+        panels.append(f"""
+set label 300 {gnuplot_quote(title)} at graph 0,1.085 left font ',19' tc rgb '{theme['foreground']}'
+set label 301 'B64Z = 1' at first 1, graph 1.02 left font ',13' tc rgb '{theme['colors']['b64z']}'
+set label 302 'Mean' at graph 1.03,1.02 left font ',13' tc rgb '{theme['muted']}'
+{chr(10).join(labels)}
+unset key
+set border 1
+set logscale x
+set xrange [{x_low:g}:{x_high:g}]
+set yrange [{min(positions.values()) - 0.8:g}:1.5]
+set xtics {RATIO_TICS}
+set ytics ({ytics}) scale 0 font ',15'
+{'unset ytics' if panel else ''}
+set grid xtics noytics
+set xlabel 'Ratio to B64Z (log scale)' offset 0,-0.3
+set arrow 90 from 1, graph 0 to 1, graph 1 nohead lc rgb '{theme['colors']['b64z']}' lw 2 back
+plot {GNUPLOT_PLOT_SEPARATOR.join(plots)}
+unset label
+""")
     return (
-        f"set label 100 {gnuplot_quote(f'B64Z Linux x86-64 {backend}: benchmark summary')} at screen 0.5,0.98 center font ',22' textcolor rgb {gnuplot_quote(theme['foreground'])}\n"
-        f"set label 101 'B64Z yellow line = 1.0x; bars end at geometric means; whiskers show the middle 50% of 25 cases; lower is better' at screen 0.5,0.945 center font ',13' textcolor rgb {gnuplot_quote(theme['muted'])}\n"
-        "set multiplot layout 1,2 rowsfirst margins 0.09,0.91,0.13,0.78 spacing 0.10,0\n"
+        figure_header(
+            f"Command time and peak memory | B64Z {target.backend.upper()}",
+            "Linux x86-64 | Native peer builds | 25 input cases per mode | Lower ratios are better",
+            "Markers: geometric means. Whiskers: middle 50% of cases, not confidence intervals.",
+            theme_name,
+        )
+        + "set multiplot layout 1,2 rowsfirst margins 0.245,0.905,0.17,0.81 spacing 0.13,0\n"
         + "\n".join(panels)
         + "\nunset multiplot\n"
     )
 
 
 def scaling_body(
-    data_paths: dict[tuple[str, str], Path], theme_name: str
+    data_paths: dict[tuple[str, str], Path], theme_name: str, target: Target
 ) -> str:
-    theme = PLOT_THEMES[theme_name]
-    colors = theme["colors"]
-    panels: list[str] = []
+    values = [
+        float(line.split()[1])
+        for path in data_paths.values()
+        for line in path.read_text(encoding="utf-8").splitlines()
+    ]
+    y_low = 10 ** math.floor(math.log10(min(values)) - 0.05)
+    y_high = 10 ** math.ceil(math.log10(max(values)) + 0.05)
+    panels = []
     for panel, mode in enumerate(MODES):
         tools = ["b64z", *(peer.id for peer in PEERS if mode in peer.modes)]
-        plots = []
-        for tool in tools:
-            plots.append(
-                f"{gnuplot_quote(data_paths[(mode, tool)])} using 1:2 with linespoints "
-                f"lw 2.5 dt {DASHES[tool]} pt {MARKERS[tool]} ps 1.45 "
-                f"lc rgb {gnuplot_quote(colors[tool])} "
-                f"title {gnuplot_quote('B64Z' if tool == 'b64z' else PEER_BY_ID[tool].label)}"
-            )
-        ylabel = "Throughput (GiB/s)" if panel % 2 == 0 else ""
-        key_x = 0.27 if panel % 2 == 0 else 0.73
-        key_y = 0.87 if panel < 2 else 0.43
-        title_y = 0.90 if panel < 2 else 0.465
-        title_id = 300 + panel
-        panels.append(
-            "unset title\n"
-            + f"set label {title_id} {gnuplot_quote(title_for_mode(mode))} "
-            + f"at screen {key_x},{title_y} center font ',17' "
-            + f"textcolor rgb {gnuplot_quote(theme['foreground'])} front\n"
-            + "set xlabel ''\n"
-            + f"set ylabel {gnuplot_quote(ylabel)} textcolor rgb {gnuplot_quote(theme['foreground'])}\n"
-            + "set xrange [0.8:5.2]\n"
-            + "set xtics ('tiny' 1, 'small' 2, 'medium' 3, 'large' 4, 'huge' 5) font ',12'\n"
-            + "set logscale y\n"
-            + "set format y '%.2g'\n"
-            + f"set grid xtics ytics lc rgb {gnuplot_quote(theme['grid'])} lw 1\n"
-            + f"set key at screen {key_x},{key_y} center noopaque nobox font ',12' textcolor rgb {gnuplot_quote(theme['foreground'])} samplen 1.5 spacing 1.1 horizontal maxcols 3\n"
-            + "plot "
-            + GNUPLOT_PLOT_SEPARATOR.join(plots)
-            + f"\nunset label {title_id}\n"
-        )
+        plots = [
+            f"{gnuplot_quote(data_paths[(mode, tool)])} using 1:2 "
+            f"with linespoints {series_style(tool, theme_name, dashed=True)} notitle"
+            for tool in tools
+        ]
+        panels.append(f"""
+set logscale x 2
+set logscale y 10
+set xrange [128:67108864]
+set yrange [{y_low:g}:{y_high:g}]
+set xtics ('256 B' 256, '16 KiB' 16384, '1 MiB' 1048576, '8 MiB' 8388608, '32 MiB' 33554432) font ',14'
+set format y '10^{{%L}}'
+set xlabel {gnuplot_quote('Nominal input size (log scale)' if panel >= 2 else '')}
+set ylabel {gnuplot_quote('Throughput (GiB/s)' if panel % 2 == 0 else '')}
+{panel_plot(panel, mode, plots, theme_name, 'linespoints')}
+""")
     return (
-        f"set label 100 'B64Z Linux x86-64: throughput by input size' at screen 0.5,0.985 center font ',22' textcolor rgb {gnuplot_quote(theme['foreground'])}\n"
-        f"set label 101 'geometric mean of general, float32, and float64 cases at each size' at screen 0.5,0.955 center font ',13' textcolor rgb {gnuplot_quote(theme['muted'])}\n"
-        "set multiplot layout 2,2 rowsfirst margins 0.08,0.92,0.10,0.85 spacing 0.08,0.14\n"
+        figure_header(
+            f"Throughput by input size | B64Z {target.backend.upper()}",
+            "Linux x86-64 | Native peer builds | Geometric mean of five input forms per size | Higher is better",
+            "Sizes refer to the data before compression; throughput uses actual binary bytes. Both axes are logarithmic.",
+            theme_name,
+        )
+        + "set multiplot layout 2,2 rowsfirst margins 0.085,0.975,0.135,0.79 spacing 0.10,0.14\n"
         + "\n".join(panels)
         + "\nunset multiplot\n"
     )
@@ -1314,111 +1334,76 @@ def isocost_body(
     summary_paths: dict[tuple[str, str], Path],
     point_paths: dict[tuple[str, str], Path],
     theme_name: str,
+    target: Target | None = None,
 ) -> str:
     theme = PLOT_THEMES[theme_name]
     colors = theme["colors"]
-    panels: list[str] = []
+    baseline = {(row["mode"], row["case_id"]): row for row in rows if row["tool"] == "b64z"}
+    limits = {}
+    for metric, field in (("time", "wall_ns"), ("rss", "rss_bytes")):
+        values = [
+            row_float(row, field) / row_float(baseline[(row["mode"], row["case_id"])], field)
+            for row in rows
+        ]
+        values.extend(
+            float(row[f"{metric}_{stat}"])
+            for row in summary
+            for stat in ("ratio", "iqr_low", "iqr_high")
+        )
+        limits[metric] = ratio_range(values)
+    x_low, x_high = limits["time"]
+    y_low, y_high = limits["rss"]
+    curve_labels = []
+    for index, cost in enumerate(COST_LEVELS):
+        x = max(x_low * 1.07, cost / (y_high / 1.13))
+        y = cost / x
+        if x < x_high / 1.1 and y > y_low * 1.1:
+            curve_labels.append(
+                f"set label {200 + index} 'C = {cost:g}' at first {x:g},{y:g} "
+                f"left offset char 0.25,0.35 font ',12' tc rgb '{theme['muted']}' front boxed"
+            )
+    panels = []
     for panel, mode in enumerate(MODES):
-        mode_summary = [row for row in summary if row["mode"] == mode]
-        mode_rows = [row for row in rows if row["mode"] == mode]
-        baseline_by_case = {
-            row["case_id"]: row for row in mode_rows if row["tool"] == "b64z"
-        }
-        case_time_values = [
-            row_float(row, "wall_ns")
-            / row_float(baseline_by_case[row["case_id"]], "wall_ns")
-            for row in mode_rows
-        ]
-        case_rss_values = [
-            row_float(row, "rss_bytes")
-            / row_float(baseline_by_case[row["case_id"]], "rss_bytes")
-            for row in mode_rows
-        ]
-        time_values = [
-            float(row[field])
-            for row in mode_summary
-            for field in ("time_iqr_low", "time_ratio", "time_iqr_high")
-        ] + case_time_values
-        rss_values = [
-            float(row[field])
-            for row in mode_summary
-            for field in ("rss_iqr_low", "rss_ratio", "rss_iqr_high")
-        ] + case_rss_values
-        max_time = max(time_values)
-        max_rss = max(rss_values)
-        x_low = max(0.5, min(0.90, min(time_values) * 0.90))
-        y_low = max(0.5, min(0.90, min(rss_values) * 0.90))
-        x_high = max(1.2, max_time * 1.10)
-        y_high = max(1.2, max_rss * 1.10)
-        x_tick = 0.25 if x_high <= 3.0 else 0.5
-        y_tick = 0.25 if y_high <= 3.0 else 0.5
         tools = ["b64z", *(peer.id for peer in PEERS if mode in peer.modes)]
         plots = [
-            f"{fmt_number(cost)}/x with lines lw 1.1 dt 3 "
-            f"lc rgb {gnuplot_quote(theme['curve'])} notitle"
+            f"{cost:g}/x with lines lw 1.1 dt 3 lc rgb '{theme['curve']}' notitle"
             for cost in COST_LEVELS
         ]
+        # Draw all cases first so they cannot cover the means and quartile intervals.
+        for tool in tools:
+            if tool != "b64z":
+                plots.append(
+                    f"{gnuplot_quote(point_paths[(mode, tool)])} using 1:2 with points "
+                    f"pt {MARKERS[tool]} ps 0.55 lc rgb '#55{colors[tool][1:]}' notitle"
+                )
         for tool in tools:
             plots.append(
-                f"{gnuplot_quote(point_paths[(mode, tool)])} using 1:2 with points "
-                f"pt 7 ps 0.55 lc rgb {gnuplot_quote(colors[tool])} notitle"
+                f"{gnuplot_quote(summary_paths[(mode, tool)])} using 1:2:3:4:5:6 "
+                f"with xyerrorbars {series_style(tool, theme_name)} notitle"
             )
-            plots.append(
-                f"{gnuplot_quote(summary_paths[(mode, tool)])} using 1:2:3:4:5:6 with xyerrorbars "
-                f"lw 1.25 pt {MARKERS[tool]} ps 1.55 lc rgb {gnuplot_quote(colors[tool])} "
-                f"title {gnuplot_quote('B64Z' if tool == 'b64z' else PEER_BY_ID[tool].label)}"
-            )
-        ylabel = "Peak RSS / B64Z" if panel % 2 == 0 else ""
-        xlabel = "Wall time / B64Z" if panel >= 2 else ""
-        key_x = 0.27 if panel % 2 == 0 else 0.73
-        key_y = 0.87 if panel < 2 else 0.43
-        title_y = 0.90 if panel < 2 else 0.465
-        title_id = 300 + panel
-        label_commands = []
-        clear_labels = []
-        x_span = x_high - x_low
-        for index, cost in enumerate(COST_LEVELS):
-            label_id = 200 + index
-            label_text = gnuplot_quote(f"C={cost:g}")
-            label_x = max(x_low + x_span * 0.02, cost / y_high * 1.04)
-            label_end = min(x_high - x_span * 0.02, cost / y_low * 0.96)
-            if label_x <= label_end:
-                label_y = cost / label_x
-                label_commands.append(
-                    f"set label {label_id} {label_text} "
-                    f"at first {fmt_number(label_x)},{fmt_number(label_y)} left "
-                    f"font ',11' textcolor rgb {gnuplot_quote(theme['curve_label'])} front\n"
-                )
-            clear_labels.append(f"unset label {label_id}\n")
-        panels.append(
-            "unset title\n"
-            + f"set label {title_id} {gnuplot_quote(title_for_mode(mode))} "
-            + f"at screen {key_x},{title_y} center font ',17' "
-            + f"textcolor rgb {gnuplot_quote(theme['foreground'])} front\n"
-            + f"set xlabel {gnuplot_quote(xlabel)} textcolor rgb {gnuplot_quote(theme['foreground'])}\n"
-            + f"set ylabel {gnuplot_quote(ylabel)} textcolor rgb {gnuplot_quote(theme['foreground'])}\n"
-            + f"set xrange [{fmt_number(x_low)}:{fmt_number(x_high)}]\n"
-            + f"set yrange [{fmt_number(y_low)}:{fmt_number(y_high)}]\n"
-            + f"set xtics {fmt_number(x_tick)} font ',12'\n"
-            + f"set ytics {fmt_number(y_tick)} font ',12'\n"
-            + "set format x '%.2f'\n"
-            + "set format y '%.2f'\n"
-            + f"set grid xtics ytics lc rgb {gnuplot_quote(theme['grid'])} lw 1\n"
-            + f"set arrow 90 from 1, graph 0 to 1, graph 1 nohead dt 2 lc rgb {gnuplot_quote(theme['reference'])} lw 1\n"
-            + f"set arrow 91 from graph 0, first 1 to graph 1, first 1 nohead dt 2 lc rgb {gnuplot_quote(theme['reference'])} lw 1\n"
-            + "set samples 200\n"
-            + f"set key at screen {key_x},{key_y} center noopaque nobox font ',12' textcolor rgb {gnuplot_quote(theme['foreground'])} samplen 1.5 spacing 1.1 horizontal maxcols 3\n"
-            + "".join(label_commands)
-            + "plot "
-            + GNUPLOT_PLOT_SEPARATOR.join(plots)
-            + "\n"
-            + f"unset label {title_id}\n"
-            + "".join(clear_labels)
-        )
+        panels.append(f"""
+set logscale xy 2
+set xrange [{x_low:g}:{x_high:g}]
+set yrange [{y_low:g}:{y_high:g}]
+set xtics {RATIO_TICS}
+set ytics {RATIO_TICS}
+set xlabel {gnuplot_quote('Wall time / B64Z' if panel >= 2 else '')}
+set ylabel {gnuplot_quote('Peak RSS / B64Z' if panel % 2 == 0 else '')}
+set arrow 90 from 1, graph 0 to 1, graph 1 nohead dt 2 lc rgb '{theme['reference']}' lw 1.2 back
+set arrow 91 from graph 0, first 1 to graph 1, first 1 nohead dt 2 lc rgb '{theme['reference']}' lw 1.2 back
+set samples 160
+{chr(10).join(curve_labels)}
+{panel_plot(panel, mode, plots, theme_name, 'points')}
+""")
+    backend = f" {target.backend.upper()}" if target else ""
     return (
-        f"set label 100 'B64Z Linux x86-64: speed and peak RSS summary' at screen 0.5,0.985 center font ',22' textcolor rgb {gnuplot_quote(theme['foreground'])}\n"
-        f"set label 101 'larger markers are geometric means; small dots are individual cases; bars show the middle 50% of 25 cases; curves show C = time ratio * RSS ratio' at screen 0.5,0.955 center font ',13' textcolor rgb {gnuplot_quote(theme['muted'])}\n"
-        "set multiplot layout 2,2 rowsfirst margins 0.08,0.92,0.10,0.85 spacing 0.08,0.14\n"
+        figure_header(
+            f"Time and memory tradeoffs | B64Z{backend}",
+            "Linux x86-64 | Native peer builds | B64Z = 1 | Lower left is better | Both axes are logarithmic",
+            "Small marks: cases. Large marks: geometric means. Bars: middle 50% of cases. C = time ratio * RSS ratio.",
+            theme_name,
+        )
+        + "set multiplot layout 2,2 rowsfirst margins 0.085,0.975,0.135,0.79 spacing 0.10,0.14\n"
         + "\n".join(panels)
         + "\nunset multiplot\n"
     )
@@ -1447,41 +1432,19 @@ def render_figures(
             for suffix in (".png", ".svg"):
                 (output / f"{figure_name}{suffix}").unlink(missing_ok=True)
         for theme_name in PLOT_THEMES:
-            scaling_output = output / f"scaling-{theme_name}"
-            run_gnuplot(
-                terminal_script(
-                    scaling_output,
-                    scaling_body(scaling_paths, theme_name),
-                    theme_name,
-                )
-            )
-            normalize_svg(scaling_output.with_suffix(".svg"))
-            isocost_output = output / f"isocost-{theme_name}"
-            run_gnuplot(
-                terminal_script(
-                    isocost_output,
-                    isocost_body(
-                        rows,
-                        summary,
-                        isocost_summary_paths,
-                        isocost_point_paths,
-                        theme_name,
-                    ),
-                    theme_name,
-                )
-            )
-            normalize_svg(isocost_output.with_suffix(".svg"))
+            figures = {
+                "scaling": scaling_body(scaling_paths, theme_name, target),
+                "isocost": isocost_body(
+                    rows, summary, isocost_summary_paths, isocost_point_paths, theme_name, target
+                ),
+            }
             if summary_paths is not None:
-                summary_output = output / f"summary-{theme_name}"
-                run_gnuplot(
-                    terminal_script(
-                        summary_output,
-                        summary_body(target, summary, summary_paths, theme_name),
-                        theme_name,
-                        size=(1800, 900),
-                    )
-                )
-                normalize_svg(summary_output.with_suffix(".svg"))
+                figures["summary"] = summary_body(target, summary, summary_paths, theme_name)
+            for name, body in figures.items():
+                destination = output / f"{name}-{theme_name}"
+                size = (1280, 900 if name == "summary" else 1000)
+                run_gnuplot(terminal_script(destination, body, theme_name, size))
+                normalize_svg(destination.with_suffix(".svg"))
 
 
 def format_ratio(value: float) -> str:
@@ -1549,9 +1512,9 @@ def result_notes(summary: list[dict[str, object]]) -> list[str]:
             if float(row["rss_ratio"]) < 1.0
         ]
         if faster:
-            time_text = f"lower geometric-mean time than {', '.join(faster)}"
+            time_text = f"higher geometric-mean time than {', '.join(faster)}"
             if slower:
-                time_text += f"; higher than {', '.join(slower)}"
+                time_text += f"; lower than {', '.join(slower)}"
         else:
             time_text = "the lowest geometric-mean time among the listed rows"
         rss_text = (
@@ -1723,13 +1686,16 @@ def report_text(
     return "\n".join(lines)
 
 
-def render(target: Target) -> None:
-    require_clean_worktree("write a benchmark report")
+def render(target: Target, *, figures_only: bool = False) -> None:
+    if not figures_only:
+        require_clean_worktree("write a benchmark report")
     target_dir = target.directory
     metadata, rows = read_measurements(target_dir / "measurements.tsv")
     summary = build_summary(rows)
-    write_summary(target_dir / "summary.tsv", summary)
     render_figures(target, rows, summary)
+    if figures_only:
+        return
+    write_summary(target_dir / "summary.tsv", summary)
     report = report_text(target, metadata, rows, summary)
     temporary = target_dir / f".README.md.{os.getpid()}.tmp"
     temporary.write_text(report, encoding="utf-8")
@@ -1802,7 +1768,10 @@ def parser() -> argparse.ArgumentParser:
         "render", help="render a report from measurements.tsv"
     )
     render_parser.add_argument("--target", choices=sorted(TARGETS), required=True)
-    render_parser.set_defaults(handler=lambda args: render(TARGETS[args.target]))
+    render_parser.add_argument(
+        "--figures-only", action="store_true", help="redraw SVGs from retained measurements without rewriting report tables or metadata"
+    )
+    render_parser.set_defaults(handler=lambda args: render(TARGETS[args.target], figures_only=args.figures_only))
     return result
 
 

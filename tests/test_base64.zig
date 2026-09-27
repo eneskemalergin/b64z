@@ -264,10 +264,8 @@ test "[property] - [decoder]: classifies every byte at every group position" {
             } else if (position == 3 and byte == '=') {
                 try std.testing.expectEqual(@as(usize, 2), try result);
             } else {
-                _ = result catch |err| switch (err) {
-                    error.InvalidCharacter, error.InvalidPadding => 0,
-                    else => return err,
-                };
+                const expected = if (byte == '=') error.InvalidPadding else error.InvalidCharacter;
+                try std.testing.expectError(expected, result);
             }
         }
         input[position] = 'A';
